@@ -16,13 +16,12 @@
 // Coordinates are 0-based end-exclusive everywhere, as in the rest of BublaGene.
 //
 // A construct keeps `doc.cloning`, a structured record of what it was built
-// from (operation, parents, fragments and junctions). `historyTreeXML()` renders
-// it in the binary format's history-tree schema.
+// from (operation, parents, fragments and junctions). `cloningRecord()` returns
+// it as plain JSON under a stable schema; `cloningFromJSON()` reads it back.
 
 import { revcomp, mod, subseq, rangeLength, inRange } from './seq.js';
 import { newDocument, newId, addHistory } from './model.js';
 import { findSites, ENZYME_BY_NAME } from './enzymes.js';
-import { el, toXML } from './xml.js';
 
 const FLANK = 12;
 
@@ -252,8 +251,8 @@ function defaultName(pieces, type) {
   return `${first} + ${inserts.join(' + ')}`;
 }
 
-// A short provenance line for Notes.description, which (unlike the HistoryTree)
-// is plain XML and survives a .dna round trip.
+// A short provenance line for Notes.description, which is plain XML and
+// survives a .dna round trip.
 function provenanceText(inputs, type, circular) {
   const label = type === 'gibson' ? 'Gibson assembly' : 'Restriction cloning';
   const parts = inputs.map((i) => {
@@ -322,8 +321,9 @@ export function assemblePieces(pieces, {
     j.regeneratedSites = regeneratedSites(seq, circular, j.position, j.enzymes);
   }
 
-  const op = operation ?? (type === 'gibson' ? 'gibsonAssembly' : n === 1 && circular ? 'circularize' : 'insertFragment');
+  const op = operation ?? (type === 'gibson' ? 'gibson-assembly' : n === 1 && circular ? 'circularization' : 'restriction-ligation');
   doc.cloning = {
+    schema: CLONING_SCHEMA,
     type,
     operation: op,
     created: new Date().toISOString(),
@@ -380,7 +380,7 @@ export function restrictionClone({
     circular,
     name: name ?? defaultName([b, ins], 'restriction'),
     type: 'restriction',
-    operation: 'insertFragment',
+    operation: 'restriction-ligation',
     description,
   });
   result.orientation = chosen;
@@ -633,8 +633,9 @@ export function gibsonAssemble(inputs, {
   }
 
   doc.cloning = {
+    schema: CLONING_SCHEMA,
     type: 'gibson',
-    operation: 'gibsonAssembly',
+    operation: 'gibson-assembly',
     created: new Date().toISOString(),
     circular,
     product: { name: doc.name, seqLen: productLen },
@@ -664,120 +665,36 @@ export function gibsonAssemble(inputs, {
 
 // ---- history ---------------------------------------------------------------
 
-function segmentRange(s) {
-  return `${s.start + 1}-${s.end}`;
-}
+export const CLONING_SCHEMA = 'bublagene/cloning/1';
 
-function richText(value) {
-  const s = String(value ?? '');
-  if (!s) return s;
-  if (/^<html[\s>]/i.test(s)) return s;
-  return `<html><body>${s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</body></html>`;
-}
-
-function featureNode(f) {
-  const attrs = { ...f.extra, name: f.name, type: f.type };
-  if (f.strand === 1) attrs.directionality = '1';
-  else if (f.strand === -1) attrs.directionality = '2';
-  const segs = (f.segments ?? []).map((s) =>
-    el('Segment', { ...s.extra, range: segmentRange(s), color: s.color || f.color, name: s.name, type: s.extra?.type ?? 'standard' }),
-  );
-  const quals = (f.qualifiers ?? []).map((q) =>
-    el(
-      'Q',
-      { name: q.name },
-      (q.values ?? []).map((v) =>
-        v.kind === 'int' ? el('V', { int: v.value }) : v.kind === 'predef' ? el('V', { predef: v.value }) : el('V', { text: richText(v.value) }),
-      ),
-    ),
-  );
-  return el('Feature', attrs, [...segs, ...quals]);
-}
-
-const featuresNode = (features) => el('Features', {}, (features ?? []).map(featureNode));
-
-function rangeAttr(start, end) {
-  return `${start}..${Math.max(start, end - 1)}`;
-}
-
-// Render doc.cloning as the binary format's history-tree XML (the content of its
-// 0x07 segment, which the format stores compressed). Returns null when the
-// document has no cloning record.
-export function historyTreeXML(doc) {
+// The record is self-contained: everything needed to describe how a construct
+// was made, in a stable JSON shape that can be written beside the sequence.
+export function cloningRecord(doc) {
   const c = doc?.cloning;
   if (!c) return null;
-  const kids = [];
+  return { ...structuredClone(c), schema: CLONING_SCHEMA };
+}
 
-  const seenSites = new Set();
-  for (const site of c.junctions.flatMap((j) => j.regeneratedSites ?? [])) {
-    const key = `${site.name}:${site.pos}`;
-    if (seenSites.has(key)) continue;
-    seenSites.add(key);
-    kids.push(el('RegeneratedSite', { name: site.name, pos: site.pos, siteCount: site.siteCount ?? 1 }));
+// Validate and normalise a record read from JSON. Throws on an unknown schema
+// or a payload that cannot describe a construct.
+export function cloningFromJSON(value) {
+  const record = typeof value === 'string' ? JSON.parse(value) : structuredClone(value);
+  if (!record || record.schema !== CLONING_SCHEMA) {
+    throw new Error(`Unsupported cloning record (expected schema ${CLONING_SCHEMA})`);
   }
-
-  // Display-only: the file format trims the overhang bases from these ranges;
-  // the pieces' full extents are accurate enough for recolouring a map.
-  const ranges = c.inputs.map((inp, i) =>
-    el('ColorRange', { range: rangeAttr(inp.piece.start, inp.piece.end), colors: i === 0 ? 'black' : 'red' }),
-  );
-  kids.push(el('HistoryColors', {}, [el('StrandColors', { type: 'Product' }, [el('TopStrand', {}, ranges)])]));
-
-  c.inputs.forEach((inp, i) => {
-    let manipulation;
-    if (c.type === 'gibson') manipulation = 'insert';
-    else if (i === 0) manipulation = 'replace';
-    else manipulation = inp.orientation === 'reverse' ? 'flipAndInsert' : 'insert';
-    const left = inp.ends?.left;
-    const right = inp.ends?.right;
-    const hasEnzyme = left?.enzyme || right?.enzyme;
-    kids.push(
-      el('InputSummary', {
-        manipulation,
-        name1: left?.enzyme ?? undefined,
-        name2: right?.enzyme ?? undefined,
-        val1: inp.fragment ? inp.fragment.start : inp.piece.start,
-        val2: inp.fragment ? inp.fragment.end : inp.piece.end,
-        siteCount1: hasEnzyme ? 1 : undefined,
-        siteCount2: hasEnzyme ? 1 : undefined,
-      }),
-    );
-  });
-
-  for (let i = 0; i < c.inputs.length; i++) {
-    const inp = c.inputs[i];
-    kids.push(
-      el(
-        'Node',
-        {
-          name: inp.name,
-          type: 'DNA',
-          seqLen: inp.seqLen,
-          strandedness: 'double',
-          ID: i + 1,
-          circular: inp.circular ? '1' : undefined,
-          operation: 'invalid',
-          resurrectable: '1',
-        },
-        [featuresNode(inp.features)],
-      ),
-    );
+  if (!record.product || !Number.isFinite(record.product.seqLen)) {
+    throw new Error('Cloning record is missing the product size');
   }
+  if (!Array.isArray(record.inputs) || !Array.isArray(record.junctions)) {
+    throw new Error('Cloning record is missing its inputs or junctions');
+  }
+  return record;
+}
 
-  const root = el(
-    'Node',
-    {
-      name: doc.name,
-      type: 'DNA',
-      seqLen: doc.seq.length,
-      strandedness: 'double',
-      ID: 0,
-      circular: doc.circular ? '1' : undefined,
-      operation: c.operation,
-    },
-    kids,
-  );
-  return toXML(el('HistoryTree', {}, [root]), { declaration: true });
+// The sidecar filename for a construct: construct.dna -> construct.cloning.json.
+export function cloningSidecarName(fileName) {
+  const s = String(fileName ?? 'construct');
+  return `${s.replace(/\.[^./\\]+$/, '')}.cloning.json`;
 }
 
 // Human-oriented summary for the command line or a panel.

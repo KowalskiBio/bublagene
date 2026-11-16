@@ -4,10 +4,9 @@ import { newDocument, newId } from '../js/model.js';
 import { revcomp } from '../js/seq.js';
 import { ENZYME_BY_NAME, findSites, digest } from '../js/enzymes.js';
 import { readDna, writeDna } from '../js/formats/dna.js';
-import { parseXML } from '../js/xml.js';
 import {
   endsCompatible, describeEnd, pieceFromFragment, checkLigation, restrictionClone,
-  assemblePieces, gibsonAssemble, historyTreeXML, cloningSummary,
+  assemblePieces, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName, cloningSummary,
 } from '../js/cloning.js';
 
 const feat = (name, start, end, strand = 1) => ({
@@ -194,7 +193,7 @@ test('Gibson assembly joins two fragments sharing terminal overlaps', () => {
   const byName = Object.fromEntries(doc.features.map((f) => [f.name, f]));
   assert.deepEqual([byName['A block'].segments[0].start, byName['A block'].segments[0].end], [16, 46]);
   assert.deepEqual([byName['C block'].segments[0].start, byName['C block'].segments[0].end], [62, 92]);
-  assert.equal(doc.cloning.operation, 'gibsonAssembly');
+  assert.equal(doc.cloning.operation, 'gibson-assembly');
   assert.ok(doc.history.some((h) => h.action === 'Gibson assembly'));
 });
 
@@ -216,7 +215,7 @@ test('Gibson assembly reports when no overlap is found', () => {
   assert.throws(() => gibsonAssemble([f1, f2], { circular: true, minOverlap: 15 }), /No assembly found/);
 });
 
-test('cloning history renders as a portable history tree', () => {
+test('cloning history is a portable JSON record', () => {
   const vector = newDocument({ name: 'pUC.dna', seq: 'A'.repeat(40) + 'GAATTC' + 'C'.repeat(100) + 'GGATCC' + 'T'.repeat(30), circular: true });
   const insert = newDocument({ name: 'gene.dna', seq: 'G'.repeat(20) + 'GAATTC' + 'A'.repeat(60) + 'GGATCC' + 'G'.repeat(20), circular: false });
   vector.features = [feat('ori', 46, 146)];
@@ -230,25 +229,27 @@ test('cloning history renders as a portable history tree', () => {
     name: 'pUC-gene.dna',
   });
 
-  const xml = historyTreeXML(doc);
-  assert.match(xml, /<HistoryTree>/);
-  assert.match(xml, /operation="insertFragment"/);
-  assert.match(xml, /name="pUC.dna"/);
-  assert.match(xml, /name="gene.dna"/);
-  assert.match(xml, /<RegeneratedSite name="BamHI" pos="106" siteCount="1"\/>/);
-  assert.match(xml, /manipulation="flipAndInsert"/);
-  const root = parseXML(xml);
-  assert.equal(root.tag, 'HistoryTree');
-  assert.equal(root.children[0].tag, 'Node');
-  assert.equal(root.children[0].attrs.seqLen, '172');
-  assert.equal(root.children[0].attrs.circular, '1');
+  const record = cloningRecord(doc);
+  assert.equal(record.schema, 'bublagene/cloning/1');
+  assert.equal(record.type, 'restriction');
+  assert.equal(record.operation, 'restriction-ligation');
+  assert.equal(record.product.seqLen, 172);
+  assert.equal(record.inputs.length, 2);
+  assert.equal(record.inputs[1].orientation, 'reverse');
+  assert.equal(record.junctions.length, 2);
+  assert.ok(record.junctions[0].regeneratedSites.some((s) => s.name === 'BamHI' && s.pos === 106));
+
+  assert.deepEqual(cloningFromJSON(JSON.stringify(record)), record);
+  assert.throws(() => cloningFromJSON({ schema: 'other' }), /Unsupported cloning record/);
+  assert.equal(cloningSidecarName('a/construct.dna'), 'a/construct.cloning.json');
+  assert.equal(cloningSidecarName('construct'), 'construct.cloning.json');
 
   const summary = cloningSummary(doc);
   assert.equal(summary.size, 172);
   assert.equal(summary.inputs.length, 2);
   assert.equal(summary.junctions.length, 2);
   assert.ok(summary.junctions[0].regenerated.includes('BamHI at 107'));
-  assert.equal(historyTreeXML(newDocument()), null);
+  assert.equal(cloningRecord(newDocument()), null);
   assert.match(doc.notes.description, /Restriction cloning: .*pUC\.dna.*gene\.dna.*reversed/);
   const round = readDna(writeDna(doc), 'round.dna');
   assert.equal(round.seq, doc.seq);

@@ -98,6 +98,7 @@ node tools/bg.mjs info plasmid.dna
 | `bg pcr <file> <fwd> <rev>` | simulate PCR and describe the product |
 | `bg clone <vector> <insert> <enzyme,...> [out]` | cut both, ligate the insert, describe or save the construct |
 | `bg gibson <f1> <f2> [...] [-o out] [--linear]` | assemble fragments by shared terminal overlaps |
+| `bg history <file>` | print the cloning record stored beside a file |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,
@@ -138,10 +139,12 @@ Gibson assembly uses `gibsonAssemble([doc1, doc2, …])`, which infers the order
 and orientation from shared terminal overlaps (15 bp by default).
 
 Products keep `doc.cloning` (operation, parents, fragments, junctions and
-regenerated sites), and `historyTreeXML(doc)` renders the binary format's
-history-tree schema. The product's Notes description also records the parents
-and enzymes, so a saved `.dna` keeps a readable provenance line. Compressed
-history blocks in existing files are passed through untouched.
+regenerated sites). `cloningRecord(doc)` returns it as plain JSON under the
+schema `bublagene/cloning/1`, and the CLI writes it beside the construct as
+`<name>.cloning.json`; `bg history <file>` prints it. The product's Notes
+description also records the parents and enzymes, so a saved `.dna` keeps a
+readable provenance line. Compressed history blocks in existing files are
+passed through untouched and are not decoded.
 
 ## Working with .dna files
 

@@ -9,17 +9,18 @@
 //   bg pcr       <file> <fwd> <rev>      simulate PCR, print the product
 //   bg clone     <vector> <insert> <enzyme,...> [out]   restriction cloning
 //   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
+//   bg history   <file>                  read the cloning record beside a file
 //   bg convert   <file> <out.gb|.fasta|.dna>
 //
 // Files may be .dna (binary), .gb/.gbk/.genbank, or .fasta/.fa.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { readDna, writeDna, describeSegments } from '../js/formats/dna.js';
 import { readGenBank, writeGenBank, readFasta, writeFasta } from '../js/formats/genbank.js';
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel } from '../js/enzymes.js';
 import { findBindingSites, designPrimers, simulatePCR } from '../js/primers.js';
-import { restrictionClone, gibsonAssemble } from '../js/cloning.js';
+import { restrictionClone, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName } from '../js/cloning.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength } from '../js/seq.js';
 
@@ -130,28 +131,39 @@ function saveDoc(doc, out) {
   else throw new Error(`Don't know how to write ${out}`);
 }
 
-function printClone(result, title) {
-  const { doc, warnings } = result;
-  const c = doc.cloning;
+function printRecord(record, title, size, warnings = [], features = null) {
   console.log(title);
   console.log(
-    `  fragments: ${c.inputs
+    `  fragments: ${record.inputs
       .map((i) => `${i.name} [${i.role}${i.orientation === 'reverse' ? ', reverse' : ''}] ${num(i.seqLen)} bp`)
       .join('  +  ')}`,
   );
-  for (let n = 0; n < c.junctions.length; n++) {
-    const j = c.junctions[n];
+  for (let n = 0; n < record.junctions.length; n++) {
+    const j = record.junctions[n];
     const kind = j.type === 'overlap' ? `${j.overhang.length} bp overlap` : j.type === 'blunt' ? 'blunt' : `${j.type}′ ${j.overhang}`;
     const enz = j.enzymes.filter(Boolean).join('/') || '—';
     const sites = j.regeneratedSites.map((s) => `${s.name}@${num(s.pos + 1)}`).join(', ');
-    const where = doc.circular && j.position === doc.seq.length ? 1 : j.position + 1;
+    const where = record.circular && j.position === size ? 1 : j.position + 1;
     console.log(
       `  junction ${String(n + 1).padEnd(2)} ${pad(kind, 18)} ${pad(enz, 12)} at ${num(where)}` +
         `${sites ? `   regenerates ${sites}` : ''}`,
     );
   }
-  console.log(`  product:   ${num(doc.seq.length)} bp ${doc.circular ? 'circular' : 'linear'}, ${doc.features.length} feature(s)`);
+  console.log(`  product:   ${num(size)} bp ${record.circular ? 'circular' : 'linear'}${features == null ? '' : `, ${features} feature(s)`}`);
   for (const w of warnings) console.log(`  note: ${w}`);
+}
+
+function printClone(result, title) {
+  printRecord(result.doc.cloning, title, result.doc.seq.length, result.warnings, result.doc.features.length);
+}
+
+function saveRecord(doc, out) {
+  const record = cloningRecord(doc);
+  if (!record) return null;
+  const path = cloningSidecarName(out);
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`);
+  console.log(`Wrote ${path}`);
+  return path;
 }
 
 try {
@@ -228,6 +240,7 @@ try {
     if (out) {
       saveDoc(result.doc, out);
       console.log(`Wrote ${out}`);
+      saveRecord(result.doc, out);
     }
   } else if (cmd === 'gibson') {
     const args = rest.slice();
@@ -248,7 +261,13 @@ try {
     if (out) {
       saveDoc(result.doc, out);
       console.log(`Wrote ${out}`);
+      saveRecord(result.doc, out);
     }
+  } else if (cmd === 'history') {
+    const path = cloningSidecarName(file);
+    if (!existsSync(path)) throw new Error(`No cloning record beside ${file} (looked for ${path})`);
+    const record = cloningFromJSON(readFileSync(path, 'utf8'));
+    printRecord(record, `Cloning record for ${basename(file)}`, record.product.seqLen);
   } else if (cmd === 'convert') {
     const out = rest[0];
     if (!out) throw new Error('Give an output file name');
