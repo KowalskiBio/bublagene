@@ -30,12 +30,14 @@ from the built-in example.
   chromatograms are decoded too and drawn as the four dye curves with the called
   bases above them.
 - **Panels** — features (add, edit, delete, ORFs), primers (binding sites, pair
-  design, PCR), enzymes, digest with a simulated gel, and file details.
+  design, PCR), enzymes, digest with a simulated gel, cloning, and file details.
 - **Cloning** — cut a vector and an insert with the same enzymes, check that the
   ends actually ligate (and whether the insert also fits backwards), and join
   them into a new construct carrying features from both pieces. Gibson assembly
   joins fragments that share terminal overlaps. Products keep a structured
-  cloning record and can render SnapGene's `HistoryTree` XML.
+  cloning record and can render SnapGene's `HistoryTree` XML. The Cloning panel
+  drives all of this from the interface: choose the two files and the enzymes,
+  read the verdict on each orientation, and the product opens as a new tab.
 - Undo/redo, several files open at once, light and dark themes.
 - **Your files come back.** What you had open is kept in the browser's own
   storage, so closing the tab and returning offers to reopen it, listing the

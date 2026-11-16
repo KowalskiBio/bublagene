@@ -6,12 +6,13 @@ import { findBindingSites, designPrimers, simulatePCR } from '../primers.js';
 import { featureSpan, featureLength, codingSequence, colorFor, FEATURE_TYPES, newId, qualifierText, addHistory } from '../model.js';
 import { gcContent, meltingTemp, translate, revcomp, subseq, rangeLength, findOrfs } from '../seq.js';
 import { describeSegments } from '../formats/dna.js';
+import { cloningPanel } from './cloningpanel.js';
 
-export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'File'];
+export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'Cloning', 'File'];
 
 export function renderPanel(name, ctx) {
   const el = h('div');
-  ({ Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel, File: file })[name](el, ctx);
+  ({ Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel, Cloning: cloningPanel, File: file })[name](el, ctx);
   return el;
 }
 
