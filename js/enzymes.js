@@ -35,12 +35,63 @@ const RAW = [
   ['StuI', 'AGGCCT', 3, 3], ['SwaI', 'ATTTAAAT', 4, 4], ['TaqI', 'TCGA', 1, 3],
   ['XbaI', 'TCTAGA', 1, 5], ['XhoI', 'CTCGAG', 1, 5], ['XmaI', 'CCCGGG', 1, 5],
   ['XmnI', 'GAANNNNTTC', 5, 5], ['ZraI', 'GACGTC', 3, 3],
+  // additional Type IIS enzymes; cuts are outside the recognition site
+  ['BspQI', 'GCTCTTC', 8, 11], ['Esp3I', 'CGTCTC', 7, 11], ['BtgZI', 'GCGATG', 16, 20],
+  ['PaqCI', 'CACCTGC', 11, 15], ['AarI', 'CACCTGC', 11, 15], ['BspMI', 'ACCTGC', 10, 14],
+  ['FokI', 'GGATG', 14, 18], ['BsmFI', 'GGGAC', 15, 19],
 ];
 
 import { iupacRegexSource, revcomp, mod } from './seq.js';
 
-export const ENZYMES = RAW.map(([name, site, top, bottom]) => ({ name, site, top, bottom }));
+// Enzymes whose cut lies outside their recognition site.
+const TYPE_IIS = new Set(['BsaI', 'BsmBI', 'BbsI', 'SapI', 'BspQI', 'Esp3I', 'BtgZI', 'PaqCI', 'AarI', 'BspMI', 'FokI', 'BsmFI']);
+
+// Methylation sensitivity worth warning about. `dam` overlaps GATC, `dcm`
+// overlaps CCWGG, `cpg` is blocked by CpG methylation.
+const METHYLATION = {
+  BamHI: ['dam'], BclI: ['dam'], BglII: ['dam'], DpnII: ['dam'], MboI: ['dam'],
+  XbaI: ['dam'], ClaI: ['dam'], TaqI: ['dam'], AlwNI: ['dam'], BspHI: ['dam'],
+  BspEI: ['dam', 'cpg'], HpaII: ['cpg'], HhaI: ['cpg'], MspI: ['cpg'],
+  SmaI: ['cpg'], XmaI: ['cpg'], SacII: ['cpg'], BssHII: ['cpg'], NotI: ['cpg'],
+  EagI: ['cpg'], MluI: ['cpg'], NruI: ['cpg'], KasI: ['cpg'], FseI: ['cpg'],
+  EcoRII: ['dcm'], StuI: ['dcm'], AatII: ['dcm'], AvaII: ['dcm'],
+};
+
+function classify({ name, site, top, bottom }) {
+  const outside = top > site.length || bottom > site.length || top < 0 || bottom < 0;
+  const type = TYPE_IIS.has(name) ? 'IIS' : outside ? 'IIS' : 'IIP';
+  const overhang = top === bottom ? 'blunt' : bottom > top ? '5' : '3';
+  return {
+    type,
+    overhang,
+    overhangLength: Math.abs(bottom - top),
+    outsideSite: outside,
+    methylation: METHYLATION[name] ?? [],
+    palindromic: revcomp(site) === site,
+  };
+}
+
+export const ENZYMES = RAW.map(([name, site, top, bottom]) => ({ name, site, top, bottom, ...classify({ name, site, top, bottom }) }));
 export const ENZYME_BY_NAME = Object.fromEntries(ENZYMES.map((e) => [e.name, e]));
+
+export const ENZYME_SCHEMA = 'bublagene/enzymes/1';
+
+// Isoschizomers share the recognition site and the cut positions; neoschizomers
+// share only the site. Groups are computed from the dataset.
+export function isoschizomersOf(name, { siteOnly = false } = {}) {
+  const e = ENZYME_BY_NAME[name];
+  if (!e) return [];
+  return ENZYMES.filter((x) => x.name !== name && x.site === e.site && (siteOnly || (x.top === e.top && x.bottom === e.bottom))).map((x) => x.name);
+}
+
+export function enzymeInfo(e) {
+  return {
+    name: e.name, site: e.site, cut: { top: e.top, bottom: e.bottom },
+    type: e.type, overhang: e.overhang, overhangLength: e.overhangLength,
+    outsideSite: e.outsideSite, methylation: e.methylation, palindromic: e.palindromic,
+    isoschizomers: isoschizomersOf(e.name),
+  };
+}
 
 // A sensible default set: common 6+ cutters used for cloning.
 export const COMMON_SET = [
@@ -160,4 +211,135 @@ export function migration(bp, agarose = 1) {
   const lo = Math.log10(Math.max(50, 80 * agarose));
   const x = (hi - Math.log10(Math.max(bp, 10))) / (hi - lo);
   return Math.min(1.02, Math.max(0.02, x));
+}
+
+// ---- custom enzyme sets -----------------------------------------------------
+
+function normaliseEnzyme(e) {
+  if (!e || typeof e !== 'object') throw new Error('Each enzyme must be an object');
+  const name = String(e.name ?? '').trim();
+  const site = String(e.site ?? '').toUpperCase().replace(/\s+/g, '');
+  if (!name) throw new Error('Enzyme is missing a name');
+  if (!site || !/^[ACGTRYSWKMBDHVN]+$/.test(site)) throw new Error(`Enzyme ${name} has an invalid site`);
+  const top = Number(e.top ?? e.cutTop ?? (e.cut?.[0]));
+  const bottom = Number(e.bottom ?? e.cutBottom ?? (e.cut?.[1]));
+  if (!Number.isFinite(top) || !Number.isFinite(bottom)) throw new Error(`Enzyme ${name} needs numeric top/bottom cut offsets`);
+  return { name, site, top, bottom, ...classify({ name, site, top, bottom }), ...(e.note ? { note: String(e.note) } : {}) };
+}
+
+export function enzymeFromJSON(value) {
+  return normaliseEnzyme(typeof value === 'string' ? JSON.parse(value) : value);
+}
+
+// Accept a bare array or { schema, enzymes: [...] }.
+export function enzymesFromJSON(value) {
+  const data = typeof value === 'string' ? JSON.parse(value) : value;
+  if (Array.isArray(data)) return data.map(normaliseEnzyme);
+  if (!data || !Array.isArray(data.enzymes)) throw new Error('Enzyme set needs an "enzymes" array');
+  if (data.schema && data.schema !== ENZYME_SCHEMA) throw new Error(`Unsupported enzyme-set schema ${data.schema}`);
+  return data.enzymes.map(normaliseEnzyme);
+}
+
+export function enzymesToJSON(enzymes = ENZYMES) {
+  return {
+    schema: ENZYME_SCHEMA,
+    enzymes: enzymes.map((e) => ({
+      name: e.name, site: e.site, top: e.top, bottom: e.bottom,
+      type: e.type, overhang: e.overhang, overhangLength: e.overhangLength,
+      methylation: e.methylation ?? [], note: e.note,
+    })),
+  };
+}
+
+// Merge sets by name (later sets win) and validate every entry.
+export function mergeEnzymeSets(...sets) {
+  const map = new Map();
+  for (const set of sets) for (const e of set) map.set(e.name, normaliseEnzyme(e));
+  return [...map.values()];
+}
+
+// Resolve a mixed list of names and enzyme objects to objects.
+export function resolveEnzymes(list = ENZYMES, extra = []) {
+  const byName = { ...ENZYME_BY_NAME };
+  for (const e of extra) byName[e.name] = e;
+  return list.map((x) => (typeof x === 'string' ? byName[x] : x)).filter(Boolean);
+}
+
+// ---- site statistics --------------------------------------------------------
+
+export function uniqueCutters(seq, circular, enzymes = ENZYMES) {
+  return resolveEnzymes(enzymes)
+    .map((enzyme) => ({ enzyme, sites: findSites(seq, circular, enzyme) }))
+    .filter((r) => r.sites.length === 1);
+}
+
+export function cuttersByCount(seq, circular, enzymes = ENZYMES, count) {
+  return resolveEnzymes(enzymes)
+    .map((enzyme) => ({ enzyme, sites: findSites(seq, circular, enzyme) }))
+    .filter((r) => r.sites.length === count);
+}
+
+// One row per enzyme: recognition sites and the fragments its digest produces.
+export function fragmentTable(seq, circular, enzymes = COMMON_SET, extra = []) {
+  return resolveEnzymes(enzymes, extra).map((enzyme) => {
+    const sites = findSites(seq, circular, enzyme);
+    const fragments = sites.length ? digest(seq, circular, sites) : [];
+    return {
+      name: enzyme.name,
+      sites: sites.map((s) => ({ pos: s.top, strand: s.strand, site: s.site })),
+      count: sites.length,
+      fragments: fragments.map((f) => ({ len: f.len, start: f.start, end: f.end, left: f.left.end, right: f.right.end })),
+    };
+  });
+}
+
+// ---- Type IIS overhangs -----------------------------------------------------
+
+// Every Type IIS cut in the sequence with the single-stranded overhang it leaves.
+export function typeIISOverhangs(seq, circular, enzymes = ENZYMES) {
+  const rows = [];
+  for (const enzyme of resolveEnzymes(enzymes)) {
+    if (enzyme.type !== 'IIS') continue;
+    for (const site of findSites(seq, circular, enzyme)) {
+      const end = cutEnd(seq, circular, site);
+      rows.push({
+        enzyme: enzyme.name,
+        pos: site.top,
+        strand: site.strand,
+        overhang: end.oh,
+        type: end.type,
+        length: end.oh.length,
+        reverseComplement: revcomp(end.oh),
+      });
+    }
+  }
+  return rows.sort((a, b) => a.pos - b.pos);
+}
+
+// Group overhangs and report which pairs are ligation-compatible. Two ends
+// ligate when their top-strand overhang strings are equal (one of the two is on
+// the bottom strand in the duplex).
+export function overhangMatrix(seq, circular, enzymes = ENZYMES) {
+  const rows = typeIISOverhangs(seq, circular, enzymes);
+  const groups = new Map();
+  for (const row of rows) {
+    if (!row.overhang) continue;
+    if (!groups.has(row.overhang)) groups.set(row.overhang, []);
+    groups.get(row.overhang).push(row);
+  }
+  const overhangs = [...groups.keys()].sort();
+  const matrix = overhangs.map((a) => overhangs.map((b) => (a === b ? 'ligate' : revcomp(a) === b ? 'reverse-complement' : '—')));
+  return {
+    rows,
+    overhangs,
+    groups: Object.fromEntries([...groups.entries()].map(([k, v]) => [k, v])),
+    matrix,
+    compatiblePairs: overhangs.flatMap((a, i) => overhangs.slice(i).map((b) => ({ a, b, compatible: a === b }))),
+  };
+}
+
+// Type IIS sites whose overhang exactly matches `overhang`.
+export function enzymesProducingOverhang(seq, circular, overhang, enzymes = ENZYMES) {
+  const want = String(overhang).toUpperCase();
+  return typeIISOverhangs(seq, circular, enzymes).filter((r) => r.overhang === want);
 }

@@ -37,6 +37,11 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Enzymes with their real properties.** 94 curated enzymes carry cut offsets,
+  overhang type/length, isoschizomers and methylation sensitivity. Custom sets
+  are plain JSON (`bublagene/enzymes/1`) that round-trip through the CLI.
+  Unique cutters, count filters, per-enzyme fragment tables and a Type IIS
+  overhang compatibility matrix are all available.
 - **Primers that behave like primers.** Tm uses the SantaLucia unified
   nearest-neighbour parameters with salt/Mg correction, degeneracy is expanded,
   and hairpin/self-dimer/pair-dimer ΔG is reported. Design ranks candidate
@@ -117,6 +122,9 @@ node tools/bg.mjs info plasmid.dna
 | `bg composition <file>` | base counts, GC and length |
 | `bg design <file> <start..end> [flags]` | design primers with Tm, product-size, tail and restriction-site options |
 | `bg gel <bp,bp,...> [flags]` | fragment sizes on a simulated gel |
+| `bg enzymes list\|export\|import` | curated metadata or native custom enzyme sets (JSON) |
+| `bg digest <file> <enzyme,...>` | per-enzyme fragment tables |
+| `bg overhangs <file> [enzymes]` | Type IIS overhangs and the compatibility matrix |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,

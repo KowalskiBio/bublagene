@@ -9,6 +9,9 @@
 //   bg pcr       <file> <fwd> <rev>      simulate PCR, print the product
 //   bg design    <file> <start..end>     design with Tm/product/tail/restriction options
 //   bg gel       <bp,bp,...>             fragment sizes on a simulated gel
+//   bg enzymes   list|export|import ...  curated/custom enzyme sets
+//   bg digest    <file> <enzyme,...>     per-enzyme fragment tables
+//   bg overhangs <file> [enzymes]        Type IIS overhangs and compatibility
 //   bg clone     <vector> <insert> <enzyme,...> [out]   restriction cloning
 //   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
 //   bg history   <file>                  read the cloning record beside a file
@@ -24,7 +27,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { readDna, writeDna, describeSegments } from '../js/formats/dna.js';
 import { readGenBank, writeGenBank, readFasta, writeFasta } from '../js/formats/genbank.js';
-import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel } from '../js/enzymes.js';
+import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel, enzymeInfo, enzymesToJSON, enzymesFromJSON, mergeEnzymeSets, uniqueCutters, cuttersByCount, fragmentTable, typeIISOverhangs, overhangMatrix } from '../js/enzymes.js';
 import { findBindingSites, designPrimers, designPrimerPairs, simulatePCR, pcrDiagnostics, gelView } from '../js/primers.js';
 import { restrictionClone, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName } from '../js/cloning.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
@@ -114,8 +117,10 @@ function info(doc) {
   }
 }
 
-function cut(doc, names) {
-  const list = (names ? names.split(',') : COMMON_SET).map((n) => n.trim()).filter(Boolean);
+function cut(doc, names, flags = {}) {
+  let list = (names ? names.split(',') : COMMON_SET).map((n) => n.trim()).filter(Boolean);
+  if (flags.n != null) list = cuttersByCount(doc.seq, doc.circular, list, Number(flags.n)).map((r) => r.enzyme.name);
+  if (flags.unique) list = uniqueCutters(doc.seq, doc.circular, list).map((r) => r.enzyme.name);
   const unknown = list.filter((n) => !ENZYME_BY_NAME[n]);
   if (unknown.length) throw new Error(`Unknown enzyme(s): ${unknown.join(', ')}. ${ENZYMES.length} are available; try: ${COMMON_SET.slice(0, 8).join(', ')}…`);
   const rows = [];
@@ -216,6 +221,52 @@ try {
     console.log(`\n${gel.bands.length} band(s); ladder ${gel.ladder}`);
     process.exit(0);
   }
+  if (cmd === 'enzymes') {
+    const sub = file;
+    const { positional, flags } = splitFlags(rest, ['file', 'type', 'search', 'json', 'merge', 'out']);
+    const custom = flags.file ? enzymesFromJSON(readFileSync(flags.file, 'utf8')) : [];
+    if (sub === 'list' || !sub) {
+      let list = custom.length ? mergeEnzymeSets(ENZYMES, custom) : ENZYMES;
+      if (flags.type) list = list.filter((e) => e.type === String(flags.type).toUpperCase());
+      if (flags.search) list = list.filter((e) => e.name.toLowerCase().includes(String(flags.search).toLowerCase()) || e.site.includes(String(flags.search).toUpperCase()));
+      if (flags.json) {
+        console.log(JSON.stringify(enzymesToJSON(list), null, 2));
+      } else {
+        for (const e of list) {
+          console.log(`  ${pad(e.name, 11)} ${pad(e.site, 14)} ${pad(`cut ${e.top}/${e.bottom}`, 12)} ${pad(e.type, 4)} ${pad(e.overhang === 'blunt' ? 'blunt' : `${e.overhang}′ ${e.overhangLength}`, 8)} ${e.methylation.length ? `methylation: ${e.methylation.join(',')}` : ''}`);
+        }
+        console.log(`\n${list.length} enzyme(s)${custom.length ? ` (${custom.length} from ${flags.file})` : ''}`);
+      }
+    } else if (sub === 'export') {
+      const out = positional[0];
+      if (!out) throw new Error('Usage: bg enzymes export <out.json> [name,...]');
+      const names = positional[1] ? positional[1].split(',').map((x) => x.trim()).filter(Boolean) : null;
+      const list = names ? names.map((n) => {
+        const e = ENZYME_BY_NAME[n] ?? custom.find((x) => x.name === n);
+        if (!e) throw new Error(`Unknown enzyme ${n}`);
+        return e;
+      }) : (custom.length ? mergeEnzymeSets(ENZYMES, custom) : ENZYMES);
+      writeFileSync(out, `${JSON.stringify(enzymesToJSON(list), null, 2)}\n`);
+      console.log(`Wrote ${out} (${list.length} enzyme(s))`);
+    } else if (sub === 'import') {
+      const setPath = positional[0];
+      if (!setPath) throw new Error('Usage: bg enzymes import <set.json> [--out merged.json] [--merge base.json]');
+      const incoming = enzymesFromJSON(readFileSync(setPath, 'utf8'));
+      let base = ENZYMES;
+      if (flags.merge) base = enzymesFromJSON(readFileSync(flags.merge, 'utf8'));
+      const merged = mergeEnzymeSets(base, incoming);
+      if (flags.out) {
+        writeFileSync(flags.out, `${JSON.stringify(enzymesToJSON(merged), null, 2)}\n`);
+        console.log(`Wrote ${flags.out} (${merged.length} enzyme(s))`);
+      } else {
+        for (const e of incoming) console.log(`  ${pad(e.name, 11)} ${pad(e.site, 12)} cut ${e.top}/${e.bottom}  ${e.type}`);
+        console.log(`\n${incoming.length} enzyme(s) validated; ${merged.length} after merging.`);
+      }
+    } else {
+      throw new Error(`Unknown enzymes subcommand "${sub}". Use list, export or import.`);
+    }
+    process.exit(0);
+  }
   if (!file) throw new Error('Give a file to work on');
   const doc = load(file);
   const L = doc.seq.length;
@@ -230,7 +281,38 @@ try {
     } else {
       for (let i = 0; i < L; i += 60) console.log(`${String(i + 1).padStart(8)}  ${doc.seq.slice(i, i + 60).toLowerCase().match(/.{1,10}/g).join(' ')}`);
     }
-  } else if (cmd === 'cut') cut(doc, rest[0]);
+  } else if (cmd === 'cut') {
+    const { positional, flags } = splitFlags(rest, ['n', 'unique']);
+    cut(doc, positional[0], flags);
+  }
+  else if (cmd === 'digest') {
+    const { positional } = splitFlags(rest, []);
+    const names = (positional[0] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!names.length) throw new Error('Usage: bg digest <file> <enzyme,...>');
+    const rows = fragmentTable(doc.seq, doc.circular, names);
+    for (const row of rows) {
+      console.log(`${row.name}  ${row.count} site(s)`);
+      for (const f of row.fragments) {
+        const ends = `${f.left.type === 'blunt' ? 'blunt' : f.left.oh || 'end'} / ${f.right.type === 'blunt' ? 'blunt' : f.right.oh || 'end'}`;
+        console.log(`  ${pad(num(f.len) + ' bp', 12)} ${num(f.start + 1)}..${num(f.end)}   ends ${ends}`);
+      }
+      if (!row.fragments.length) console.log('  (no cuts)');
+    }
+  }
+  else if (cmd === 'overhangs') {
+    const { positional, flags } = splitFlags(rest, ['json']);
+    const names = (positional[0] ? positional[0].split(',') : ['BsaI', 'BsmBI', 'BbsI', 'SapI']).map((x) => x.trim()).filter(Boolean);
+    const matrix = overhangMatrix(doc.seq, doc.circular, names);
+    if (flags.json) {
+      console.log(JSON.stringify({ overhangs: matrix.overhangs, rows: matrix.rows, matrix: matrix.matrix }, null, 2));
+    } else {
+      for (const row of matrix.rows) {
+        console.log(`  ${pad(row.enzyme, 9)} ${row.strand === 1 ? '+' : '-'} ${pad(num(row.pos + 1), 8)} ${row.type}′ ${row.overhang} (rc ${row.reverseComplement})`);
+      }
+      console.log(`\nOverhangs: ${matrix.overhangs.join(', ') || 'none'}`);
+      for (const oh of matrix.overhangs) console.log(`  ${oh}: ${matrix.groups[oh].length} site(s)`);
+    }
+  }
   else if (cmd === 'translate') {
     const table = Number(rest[1] ?? 1);
     let s = doc.seq;
