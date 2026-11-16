@@ -37,6 +37,11 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Annotations keep their meaning.** Genetic codes 1–33 are stored per
+  feature (`/transl_table`) and honoured when translating; `codon_start` and
+  phases shift the reading frame; `<`/`>` fuzzy ends, `join`, `order`, nested
+  locations and multi-segment features survive a round trip; every qualifier
+  key is kept in file order, including unknown ones and repeated keys.
 - **Your files come back.** What you had open is kept in the browser's own
   storage, so closing the tab and returning offers to reopen it, listing the
   files and whether any had unsaved changes. "Start fresh" forgets it. Nothing
@@ -63,7 +68,7 @@ export PATH=/opt/homebrew/opt/node@24/bin:$PATH
 cd bublagene && npm test
 ```
 
-37 tests. Most run on their own; the `.dna` tests additionally read every
+The suite has grown well past its first 37 tests; most run on their own; the `.dna` tests additionally read every
 `.dna` file in a folder you point them at with `DNA_SAMPLES`:
 
 ```bash
@@ -99,6 +104,10 @@ node tools/bg.mjs info plasmid.dna
 | `bg clone <vector> <insert> <enzyme,...> [out]` | cut both, ligate the insert, describe or save the construct |
 | `bg gibson <f1> <f2> [...] [-o out] [--linear]` | assemble fragments by shared terminal overlaps |
 | `bg history <file>` | print the cloning record stored beside a file |
+| `bg translate <file> [start..end] [table]` | translate with any supported NCBI genetic code |
+| `bg codons` | list and validate the genetic codes |
+| `bg annotate <file> [out]` | recompute `translation` / `gc_content` after edits |
+| `bg composition <file>` | base counts, GC and length |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,
@@ -160,7 +169,8 @@ rather than guessed at, and `info` reports it.
 
 ```
 js/seq.js              sequence maths: complement, translation, Tm, ORFs, IUPAC
-js/model.js            the document model and edits that keep features in place
+js/codon-tables.js     NCBI genetic codes 1–33 (subset), validation, per-table translation
+js/model.js            the document model, feature catalog and edits that keep features in place
 js/xml.js              a small XML parser and writer
 js/enzymes.js          ~90 restriction enzymes, site finding, digests, gel model
 js/primers.js          primer binding, design, PCR

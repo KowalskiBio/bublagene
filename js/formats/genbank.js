@@ -1,33 +1,63 @@
 // GenBank flat-file reader/writer.
+//
+// Locations support plain, `<`/`>` fuzzy, `complement`, `join` and `order`, and
+// wrapping joins across the origin. Qualifiers are kept in file order; repeated
+// qualifier names become one entry with several values (never collapsed into a
+// string). Unknown qualifier keys survive a round trip.
 
-import { newDocument, newId, colorFor } from '../model.js';
-import { cleanSequence, rangeLength } from '../seq.js';
+import { newDocument, newId, colorFor, featureTableId, recomputeFeature } from '../model.js';
+import { cleanSequence, rangeLength, translate } from '../seq.js';
 
-// Parse a GenBank location string into {strand, segments} (0-based, end-exclusive).
+// Parse a GenBank location into {strand, segments} (0-based, end-exclusive).
 export function parseLocation(loc, L) {
-  loc = loc.replace(/\s+/g, '');
+  const d = parseLocationDetailed(loc, L);
+  return d ? { strand: d.strand, segments: d.segments } : null;
+}
+
+// Full form, including whether the top-level operator was join or order.
+export function parseLocationDetailed(loc, L) {
+  loc = String(loc).replace(/\s+/g, '');
   let strand = 1;
   const segs = [];
+  let locationType = 'plain';
+
   const walk = (s, comp) => {
     if (s.startsWith('complement(') && s.endsWith(')')) return walk(s.slice(11, -1), !comp);
     const m = /^(join|order)\((.*)\)$/.exec(s);
     if (m) {
+      if (m[1] === 'order') locationType = 'order';
+      else if (locationType === 'plain') locationType = 'join';
       const parts = splitTop(m[2]);
       const out = parts.flatMap((p) => walk(p, false));
       return comp ? out.reverse().map((x) => ({ ...x, comp: !x.comp })) : out;
     }
     if (s.includes(':')) return []; // remote reference
-    const r = /^<?(\d+)(?:\.\.>?(\d+)|\^(\d+))?>?$/.exec(s);
+    const between = /^(<?)(\d+)\^(\d+)$/.exec(s);
+    if (between) {
+      const a = parseInt(between[2], 10);
+      return [{ start: a - 1, end: a, comp, partialStart: between[1] === '<', partialEnd: false, between: true }];
+    }
+    const r = /^(<?|>?)(\d+)(?:\.\.(<?|>?)(\d+))?$/.exec(s);
     if (!r) return [];
-    const a = parseInt(r[1], 10);
-    const b = r[2] ? parseInt(r[2], 10) : r[3] ? null : a;
-    if (b === null) return [];
-    return [{ start: a - 1, end: b, comp }];
+    const a = parseInt(r[2], 10);
+    const partialStart = r[1] !== '';
+    const b = r[4] ? parseInt(r[4], 10) : a;
+    const partialEnd = r[3] === '>' || (r[1] === '>' && !r[4]) || /^<?>\d+$/.test(s) && !r[4];
+    return [{ start: a - 1, end: b, comp, partialStart, partialEnd }];
   };
+
   const raw = walk(loc, false);
   if (!raw.length) return null;
   if (raw.every((x) => x.comp)) strand = -1;
-  for (const x of raw) segs.push({ start: x.start, end: x.end <= L ? x.end : L });
+  for (const x of raw) {
+    segs.push({
+      start: x.start,
+      end: x.end <= L ? x.end : L,
+      ...(x.partialStart ? { partialStart: true } : {}),
+      ...(x.partialEnd ? { partialEnd: true } : {}),
+      ...(x.between ? { between: true } : {}),
+    });
+  }
   // store in top-strand order
   if (strand === -1) segs.reverse();
   // merge a "join(N..L,1..M)" across the origin into one wrapping segment
@@ -35,13 +65,13 @@ export function parseLocation(loc, L) {
     const last = segs[segs.length - 1];
     const first = segs[0];
     if (strand === 1 && last.start === 0 && segs[segs.length - 2]?.end === L && segs.length === 2) {
-      return { strand, segments: [{ start: first.start, end: last.end }] };
+      return { strand, segments: [{ start: first.start, end: last.end }], locationType };
     }
     if (strand === -1 && first.end === L && segs[1]?.start === 0 && segs.length === 2) {
-      return { strand, segments: [{ start: first.start, end: segs[1].end }] };
+      return { strand, segments: [{ start: first.start, end: segs[1].end }], locationType };
     }
   }
-  return { strand, segments: segs };
+  return { strand, segments: segs, locationType };
 }
 
 function splitTop(s) {
@@ -60,10 +90,14 @@ function splitTop(s) {
 export function formatLocation(f, L) {
   const parts = [];
   for (const s of f.segments) {
-    if (s.end > s.start) parts.push(s.end - s.start === 1 ? `${s.start + 1}` : `${s.start + 1}..${s.end}`);
-    else { parts.push(`${s.start + 1}..${L}`); parts.push(`1..${s.end}`); }
+    const left = s.partialStart ? '<' : '';
+    const right = s.partialEnd ? '>' : '';
+    if (s.between) parts.push(`${left}${s.start + 1}^${s.end + 1}`);
+    else if (s.end > s.start) parts.push(s.end - s.start === 1 ? `${left}${s.start + 1}${right}` : `${left}${s.start + 1}..${right}${s.end}`);
+    else { parts.push(`${left}${s.start + 1}${right}..${L}`); parts.push(`1..${s.end}`); }
   }
-  let loc = parts.length > 1 ? `join(${parts.join(',')})` : parts[0];
+  const op = f.locationType === 'order' ? 'order' : 'join';
+  let loc = parts.length > 1 ? `${op}(${parts.join(',')})` : parts[0] ?? '1..0';
   if (f.strand === -1) loc = `complement(${loc})`;
   return loc;
 }
@@ -112,31 +146,44 @@ function readRecord(rec, fileName) {
   }
   for (const f of feats) {
     if (f.key === 'source') continue;
-    const loc = parseLocation(f.loc, L);
+    const loc = parseLocationDetailed(f.loc, L);
     if (!loc) continue;
-    const qualifiers = f.quals.map((q) => {
-      const eq = q.indexOf('=');
-      const qn = eq < 0 ? q : q.slice(0, eq);
-      let v = eq < 0 ? '' : q.slice(eq + 1);
-      if (v.startsWith('"')) v = v.slice(1, v.endsWith('"') ? -1 : undefined).replace(/""/g, '"');
-      if (qn === 'translation') v = v.replace(/\s+/g, '');
-      return { name: qn, values: [{ kind: /^\d+$/.test(v) ? 'int' : 'text', value: v }] };
-    });
+    const qualifiers = parseQualifiers(f.quals);
     const label = qualifiers.find((q) => ['label', 'gene', 'product', 'note'].includes(q.name));
     const color = colorFor(f.key);
-    doc.features.push({
+    const feature = {
       id: newId(), name: label ? label.values[0].value.slice(0, 40) : f.key, type: f.key, strand: loc.strand,
       color, segments: loc.segments.map((s) => ({ ...s, color })),
-      qualifiers: qualifiers.filter((q) => q.name !== 'translation'), extra: {},
-    });
+      qualifiers, extra: {},
+    };
+    if (loc.locationType === 'order') feature.locationType = 'order';
+    doc.features.push(feature);
   }
   doc.source = { format: 'genbank', fileName };
   doc.seqEdited = false;
   return doc;
 }
 
+// Qualifier lines -> [{name, values}]. Consecutive occurrences of one name are
+// kept as one entry with several values; the order of first appearance is kept.
+export function parseQualifiers(lines) {
+  const out = [];
+  for (const q of lines) {
+    const eq = q.indexOf('=');
+    const qn = eq < 0 ? q : q.slice(0, eq);
+    let v = eq < 0 ? '' : q.slice(eq + 1);
+    if (v.startsWith('"')) v = v.slice(1, v.endsWith('"') ? -1 : undefined).replace(/""/g, '"');
+    if (qn === 'translation') v = v.replace(/\s+/g, '');
+    const kind = /^-?\d+$/.test(v) ? 'int' : 'text';
+    const prev = out[out.length - 1];
+    if (prev && prev.name === qn) prev.values.push({ kind, value: v });
+    else out.push({ name: qn, values: [{ kind, value: v }] });
+  }
+  return out;
+}
+
 function wrapQualifier(name, value) {
-  const isNum = /^\d+$/.test(value);
+  const isNum = /^-?\d+$/.test(value);
   const text = isNum ? `/${name}=${value}` : `/${name}="${value.replace(/"/g, '""')}"`;
   const out = [];
   let rest = text;
@@ -169,8 +216,10 @@ export function writeGenBank(doc) {
   lines.push(wrapQualifier('mol_type', 'other DNA'));
   for (const f of doc.features) {
     lines.push(`     ${f.type.padEnd(16)}${formatLocation(f, L)}`);
-    const quals = [...(f.qualifiers || [])];
-    if (!quals.some((q) => q.name === 'label')) quals.unshift({ name: 'label', values: [{ value: f.name }] });
+    const quals = (f.qualifiers || []).map((q) => ({ name: q.name, values: [...q.values] }));
+    if (f.name && f.name !== f.type && !quals.some((q) => ['label', 'gene', 'product', 'note'].includes(q.name))) {
+      quals.unshift({ name: 'label', values: [{ value: f.name }] });
+    }
     for (const q of quals) for (const v of q.values) lines.push(wrapQualifier(q.name, String(v.value ?? '')));
   }
   lines.push('ORIGIN');
@@ -212,4 +261,4 @@ export function writeFasta(doc) {
   return lines.join('\n') + '\n';
 }
 
-export { rangeLength };
+export { rangeLength, translate, featureTableId, recomputeFeature };

@@ -161,7 +161,7 @@ test('XML round trip keeps attributes with markup in them', () => {
 test('GenBank locations', () => {
   assert.deepEqual(parseLocation('complement(join(10..20,30..40))', 100), { strand: -1, segments: [{ start: 9, end: 20 }, { start: 29, end: 40 }] });
   assert.deepEqual(parseLocation('join(90..100,1..5)', 100), { strand: 1, segments: [{ start: 89, end: 5 }] });
-  assert.deepEqual(parseLocation('<1..>50', 100), { strand: 1, segments: [{ start: 0, end: 50 }] });
+  assert.deepEqual(parseLocation('<1..>50', 100), { strand: 1, segments: [{ start: 0, end: 50, partialStart: true, partialEnd: true }] });
   const f = { strand: -1, segments: [{ start: 89, end: 5 }] };
   assert.equal(formatLocation(f, 100), 'complement(join(90..100,1..5))');
 });

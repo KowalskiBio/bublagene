@@ -10,6 +10,10 @@
 //   bg clone     <vector> <insert> <enzyme,...> [out]   restriction cloning
 //   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
 //   bg history   <file>                  read the cloning record beside a file
+//   bg translate <file> [start..end] [table]  translate with an NCBI code
+//   bg codons                              list and validate genetic codes
+//   bg annotate  <file> [out]              recompute translations and derived qualifiers
+//   bg composition <file>                  base composition and GC
 //   bg convert   <file> <out.gb|.fasta|.dna>
 //
 // Files may be .dna (binary), .gb/.gbk/.genbank, or .fasta/.fa.
@@ -21,8 +25,9 @@ import { readGenBank, writeGenBank, readFasta, writeFasta } from '../js/formats/
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel } from '../js/enzymes.js';
 import { findBindingSites, designPrimers, simulatePCR } from '../js/primers.js';
 import { restrictionClone, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName } from '../js/cloning.js';
-import { codingSequence, featureLength, featureSpan, isCodingSegment } from '../js/model.js';
-import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength } from '../js/seq.js';
+import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
+import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
+import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
 
 const [, , cmd, file, ...rest] = process.argv;
 
@@ -61,11 +66,14 @@ function info(doc) {
       let extra = '';
       if (f.type === 'CDS') {
         const cds = codingSequence(doc, f);
-        const prot = translate(cds);
+        const prot = translateFeature(doc, f);
+        const table = featureTableId(f, doc);
         const flags = [];
         if (cds.length % 3) flags.push('not a whole number of codons');
         if (prot.slice(0, -1).includes('*')) flags.push('internal stop');
-        extra = `  ${prot.length - (prot.endsWith('*') ? 1 : 0)} aa${flags.length ? ` (${flags.join(', ')})` : ''}`;
+        if (table !== 1) flags.push(`code ${table}`);
+        const aa = prot.length - (prot.endsWith('*') ? 1 : 0);
+        extra = `  ${aa} aa, ${Math.round(featureProteinMass(doc, f)).toLocaleString('en-US')} Da${flags.length ? ` (${flags.join(', ')})` : ''}`;
       }
       const introns = f.segments.filter((s) => !isCodingSegment(s)).length;
       const spanNote = introns ? `, ${introns} gap${introns > 1 ? 's' : ''}` : '';
@@ -174,6 +182,12 @@ try {
     console.log(head.join('\n'));
     process.exit(0);
   }
+  if (cmd === 'codons') {
+    const checks = validateAllTables();
+    console.log(`NCBI genetic codes available: ${TABLE_IDS.join(', ')}`);
+    for (const v of checks) console.log(`  ${String(v.id).padStart(2)}  ${pad(v.name, 48)} ${v.ok ? 'ok' : `INVALID: ${v.issues.join(', ')}`}`);
+    process.exit(0);
+  }
   if (!file) throw new Error('Give a file to work on');
   const doc = load(file);
   const L = doc.seq.length;
@@ -189,6 +203,36 @@ try {
       for (let i = 0; i < L; i += 60) console.log(`${String(i + 1).padStart(8)}  ${doc.seq.slice(i, i + 60).toLowerCase().match(/.{1,10}/g).join(' ')}`);
     }
   } else if (cmd === 'cut') cut(doc, rest[0]);
+  else if (cmd === 'translate') {
+    const table = Number(rest[1] ?? 1);
+    let s = doc.seq;
+    let where = 'whole sequence';
+    if (rest[0] && rest[0].includes('..')) {
+      const r = parseRegion(rest[0], L);
+      s = subseq(doc.seq, r.start, r.end, doc.circular);
+      where = `${r.start + 1}..${r.end}`;
+    }
+    const p = translate(s, table);
+    console.log(`${where}  ${p.length} aa  genetic code ${table}`);
+    for (let i = 0; i < p.length; i += 60) console.log(`${String(i + 1).padStart(7)}  ${p.slice(i, i + 60)}`);
+  } else if (cmd === 'annotate') {
+    recomputeFeatures(doc);
+    const out = rest[0];
+    if (!out) {
+      for (const f of doc.features) {
+        const t = qualifierText(f, 'translation');
+        if (t) console.log(`${pad(f.type, 14)} ${pad(f.name, 22)} ${t.length} aa  ${t.slice(0, 40)}${t.length > 40 ? '…' : ''}`);
+      }
+      console.log(`${doc.features.length} feature(s) recomputed (no output file given)`);
+    } else {
+      saveDoc(doc, out);
+      console.log(`Wrote ${out}`);
+    }
+  } else if (cmd === 'composition') {
+    const c = nucleotideCount(doc.seq);
+    console.log(`${doc.name}: ${c.length} bp, GC ${c.gcPercent.toFixed(1)}%`);
+    for (const k of ['A', 'C', 'G', 'T', 'U', 'N']) if (c[k]) console.log(`  ${k}: ${c[k]}`);
+  }
   else if (cmd === 'orfs') {
     const min = Number(rest[0] ?? 100);
     const orfs = findOrfs(doc.seq, doc.circular, min);

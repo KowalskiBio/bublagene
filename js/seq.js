@@ -2,6 +2,8 @@
 // Coordinates everywhere in BublaGene: 0-based, end-exclusive; on circular
 // sequences a range may wrap (end <= start means it crosses the origin).
 
+import { translateWithTable, DEFAULT_TABLE } from './codon-tables.js';
+
 const COMP = {
   A: 'T', T: 'A', G: 'C', C: 'G', U: 'A', N: 'N',
   R: 'Y', Y: 'R', S: 'S', W: 'W', K: 'M', M: 'K',
@@ -67,7 +69,25 @@ export function gcContent(s) {
   return (100 * gc) / s.length;
 }
 
-// ---- translation (standard genetic code) -------------------------------
+// Counts of each IUPAC symbol, plus a plain A/C/G/T tally (U counted as T).
+export function nucleotideCount(s) {
+  const counts = {};
+  let gc = 0;
+  let at = 0;
+  for (const ch of s.toUpperCase()) {
+    counts[ch] = (counts[ch] ?? 0) + 1;
+    if (ch === 'G' || ch === 'C' || ch === 'S') gc++;
+    if (ch === 'A' || ch === 'T' || ch === 'U' || ch === 'W') at++;
+  }
+  return { ...counts, length: s.length, gc, at, gcPercent: s.length ? (100 * gc) / s.length : 0 };
+}
+
+// Average molecular weight of double-stranded DNA (sodium salt), Da.
+export function dnaMolecularWeight(s) {
+  return Math.round(s.length * 617.96 + 36.04);
+}
+
+// ---- translation (default genetic code: NCBI table 1) -------------------
 
 const BASES = 'TCAG';
 const AA = 'FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG';
@@ -82,11 +102,33 @@ export const THREE_LETTER = {
   T: 'Thr', W: 'Trp', Y: 'Tyr', V: 'Val', '*': 'Stop', X: 'Xaa',
 };
 
-export function translate(dna) {
+// translate(dna [, tableId | { table, initiator, stopSymbol }])
+// The default table keeps the historical one-argument behaviour.
+export function translate(dna, options = DEFAULT_TABLE) {
+  if (typeof options === 'number') return translateWithTable(dna, options);
+  const opts = options ?? {};
+  const table = opts.table ?? opts.transl_table ?? DEFAULT_TABLE;
+  if (opts.initiator || opts.start) return translateWithTable(dna, table, { initiator: true, stopSymbol: opts.stopSymbol });
+  if (opts.stopSymbol && opts.stopSymbol !== '*') return translateWithTable(dna, table, { stopSymbol: opts.stopSymbol });
+  if (Number(table) !== DEFAULT_TABLE) return translateWithTable(dna, table);
   const s = dna.toUpperCase().replace(/U/g, 'T');
   let p = '';
   for (let i = 0; i + 3 <= s.length; i += 3) p += CODON[s.slice(i, i + 3)] ?? 'X';
   return p;
+}
+
+// Six reading frames, in the order +1,+2,+3,-1,-2,-3.
+export function sixFrameTranslation(dna, tableId = DEFAULT_TABLE) {
+  const s = dna.toUpperCase().replace(/U/g, 'T');
+  const rc = revcomp(s);
+  const out = [];
+  for (const strand of [1, -1]) {
+    const source = strand === 1 ? s : rc;
+    for (let frame = 0; frame < 3; frame++) {
+      out.push({ strand, frame: frame + 1, protein: translate(source.slice(frame), tableId) });
+    }
+  }
+  return out;
 }
 
 const AA_MASS = {
