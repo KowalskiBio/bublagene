@@ -287,6 +287,73 @@ function gel(sizes, ladderName, agarose) {
 
 // ---- File -------------------------------------------------------------------
 
+// What else a .dna file carries, in the reader's terms rather than the format's.
+// Anything not listed here is either shown in BublaGene already or a search
+// cache that SnapGene rebuilds, and neither is worth mentioning.
+const CARRIED = {
+  0x07: ['the cloning history', 'cloning histories'],
+  0x0b: ['an earlier version of the sequence', 'earlier versions of the sequence'],
+  0x0c: ['extra annotations', 'sets of extra annotations'],
+  0x0d: ['display settings', 'sets of display settings'],
+  0x0e: ['custom enzyme sets', 'custom enzyme sets'],
+  0x0f: ['unsynced case changes', 'unsynced case changes'],
+  0x10: ['an aligned sequence', 'aligned sequences'],
+  // 0x11 and 0x18 only index the alignments listed above, so saying so twice
+  // tells the reader nothing
+  0x12: ['a sequencing trace', 'sequencing traces'],
+  0x13: ['marked uracil positions', 'sets of marked uracil positions'],
+  0x14: ['custom strand colours', 'sets of custom strand colours'],
+  0x16: ['custom numbering', 'sets of custom numbering'],
+  0x17: ['an embedded file', 'embedded files'],
+  0x19: ['an alignment', 'alignments'],
+  0x1a: ['an edited alignment', 'edited alignments'],
+  0x1b: ['aligned sequencing reads', 'sets of aligned sequencing reads'],
+  0x1c: ['which enzymes are shown', 'records of which enzymes are shown'],
+  0x1d: ['an edit to an earlier version', 'edits to earlier versions'],
+  0x22: ['a secondary-structure prediction', 'secondary-structure predictions'],
+  0x23: ['saved CRISPR searches', 'sets of saved CRISPR searches'],
+};
+
+function fileContents(el, doc) {
+  const segs = describeSegments(doc);
+  if (!segs.length) return;
+
+  const counts = new Map();
+  for (const s of segs) {
+    if (CARRIED[s.type]) counts.set(s.type, (counts.get(s.type) ?? 0) + 1);
+  }
+
+  el.append(h('h3', {}, 'Also in this file'));
+  if (!counts.size) {
+    el.append(h('p', { class: 'sub' }, 'Nothing beyond what you can see here.'));
+  } else {
+    el.append(h('p', { class: 'sub' }, 'BublaGene cannot show these, but keeps them exactly as they are when you save:'));
+    const list = h('ul', { class: 'sub', style: { margin: '6px 0 0', paddingLeft: '18px' } });
+    for (const [type, n] of [...counts].sort((a, b) => b[1] - a[1])) {
+      const [one, many] = CARRIED[type];
+      list.append(h('li', {}, n > 1 ? `${fmt(n)} ${many}` : one));
+    }
+    el.append(list);
+    if ([...counts.keys()].some((t) => t >= 0x10 && t <= 0x1b)) {
+      el.append(h('p', { class: 'sub', style: { marginTop: '8px' } },
+        'Open it in SnapGene to look at the sequencing data.'));
+    }
+  }
+
+  // the format-level view, for anyone who wants it
+  const details = h('details', { style: { marginTop: '10px' } });
+  details.append(h('summary', { class: 'sub', style: { cursor: 'pointer' } }, `All ${segs.length} parts of the file`));
+  const st = h('table', { class: 'data', style: { marginTop: '6px' } });
+  for (const sgm of segs) {
+    st.append(h('tr', {},
+      h('td', { class: 'mono sub' }, `0x${sgm.type.toString(16).padStart(2, '0')}`),
+      h('td', {}, sgm.name),
+      h('td', {}, `${fmt(sgm.bytes)} B`)));
+  }
+  details.append(st);
+  el.append(details);
+}
+
 function file(el, { doc, state, api }) {
   const L = doc.seq.length;
   el.append(h('label', { class: 'field' }, h('span', {}, 'Name'),
@@ -310,18 +377,11 @@ function file(el, { doc, state, api }) {
 
   if (doc.notes.organism) el.append(h('p', { class: 'sub' }, `Organism: ${doc.notes.organism}`));
 
-  const segs = describeSegments(doc);
-  if (segs.length) {
-    el.append(h('h3', {}, 'Segments in the original file'));
-    el.append(h('p', { class: 'sub' }, 'Parts BublaGene does not edit are kept exactly as they were when you save.'));
-    const st = h('table', { class: 'data' });
-    for (const sgm of segs) st.append(h('tr', {}, h('td', { class: 'mono' }, `0x${sgm.type.toString(16).padStart(2, '0')}`), h('td', {}, sgm.name), h('td', {}, `${fmt(sgm.bytes)} B`)));
-    el.append(st);
-  }
+  fileContents(el, doc);
   for (const w of doc.source?.warnings ?? []) el.append(h('p', { class: 'sub' }, w));
 
   if (doc.history?.length) {
-    el.append(h('h3', {}, 'History'));
+    el.append(h('h3', {}, 'What you have done here'));
     for (const ev of [...doc.history].reverse().slice(0, 25)) {
       el.append(h('p', { class: 'sub' }, `${ev.detail || ev.action}`));
     }
