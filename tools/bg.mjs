@@ -7,6 +7,8 @@
 //   bg orfs      <file> [minCodons]      open reading frames
 //   bg primers   <file> <start..end>     design a primer pair for a region
 //   bg pcr       <file> <fwd> <rev>      simulate PCR, print the product
+//   bg clone     <vector> <insert> <enzyme,...> [out]   restriction cloning
+//   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
 //   bg convert   <file> <out.gb|.fasta|.dna>
 //
 // Files may be .dna (SnapGene), .gb/.gbk/.genbank, or .fasta/.fa.
@@ -17,6 +19,7 @@ import { readDna, writeDna, describeSegments } from '../js/formats/dna.js';
 import { readGenBank, writeGenBank, readFasta, writeFasta } from '../js/formats/genbank.js';
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel } from '../js/enzymes.js';
 import { findBindingSites, designPrimers, simulatePCR } from '../js/primers.js';
+import { restrictionClone, gibsonAssemble } from '../js/cloning.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength } from '../js/seq.js';
 
@@ -119,9 +122,44 @@ function cut(doc, names) {
   }
 }
 
+function saveDoc(doc, out) {
+  const ext = extname(out).toLowerCase();
+  if (ext === '.dna') writeFileSync(out, writeDna(doc, { bindingSitesFor: (p) => findBindingSites(doc.seq, doc.circular, p.seq) }));
+  else if (['.gb', '.gbk', '.genbank'].includes(ext)) writeFileSync(out, writeGenBank(doc));
+  else if (['.fasta', '.fa', '.fna'].includes(ext)) writeFileSync(out, writeFasta(doc));
+  else throw new Error(`Don't know how to write ${out}`);
+}
+
+function printClone(result, title) {
+  const { doc, warnings } = result;
+  const c = doc.cloning;
+  console.log(title);
+  console.log(
+    `  fragments: ${c.inputs
+      .map((i) => `${i.name} [${i.role}${i.orientation === 'reverse' ? ', reverse' : ''}] ${num(i.seqLen)} bp`)
+      .join('  +  ')}`,
+  );
+  for (let n = 0; n < c.junctions.length; n++) {
+    const j = c.junctions[n];
+    const kind = j.type === 'overlap' ? `${j.overhang.length} bp overlap` : j.type === 'blunt' ? 'blunt' : `${j.type}′ ${j.overhang}`;
+    const enz = j.enzymes.filter(Boolean).join('/') || '—';
+    const sites = j.regeneratedSites.map((s) => `${s.name}@${num(s.pos + 1)}`).join(', ');
+    const where = doc.circular && j.position === doc.seq.length ? 1 : j.position + 1;
+    console.log(
+      `  junction ${String(n + 1).padEnd(2)} ${pad(kind, 18)} ${pad(enz, 12)} at ${num(where)}` +
+        `${sites ? `   regenerates ${sites}` : ''}`,
+    );
+  }
+  console.log(`  product:   ${num(doc.seq.length)} bp ${doc.circular ? 'circular' : 'linear'}, ${doc.features.length} feature(s)`);
+  for (const w of warnings) console.log(`  note: ${w}`);
+}
+
 try {
   if (!cmd || cmd === '-h' || cmd === '--help') {
-    console.log(readFileSync(new URL(import.meta.url)).toString().split('\n').slice(1, 13).map((l) => l.replace(/^\/\/ ?/, '')).join('\n'));
+    const src = readFileSync(new URL(import.meta.url)).toString().split('\n');
+    const head = [];
+    for (let i = 1; i < src.length && src[i].startsWith('//'); i++) head.push(src[i].replace(/^\/\/ ?/, ''));
+    console.log(head.join('\n'));
     process.exit(0);
   }
   if (!file) throw new Error('Give a file to work on');
@@ -156,14 +194,65 @@ try {
     const { doc: product, warnings } = simulatePCR(doc, rest[0], rest[1]);
     for (const w of warnings) console.log(`note: ${w}`);
     info(product);
+  } else if (cmd === 'clone') {
+    const insertPath = rest[0];
+    const enzymeSpec = rest[1];
+    const out = rest[2];
+    if (!insertPath || !enzymeSpec) {
+      throw new Error('Usage: bg clone <vector> <insert> <enzyme,...> [out.dna|.gb|.fasta]');
+    }
+    const insertDoc = load(insertPath);
+    const names = enzymeSpec.split(',').map((s) => s.trim()).filter(Boolean);
+    const unknown = names.filter((n) => !ENZYME_BY_NAME[n]);
+    if (unknown.length) throw new Error(`Unknown enzyme(s): ${unknown.join(', ')}`);
+    const fragsOf = (d) =>
+      digest(d.seq, d.circular, names.flatMap((n) => findSites(d.seq, d.circular, ENZYME_BY_NAME[n])));
+    const vecFrags = fragsOf(doc);
+    const insFrags = fragsOf(insertDoc);
+    if (vecFrags.length < 2) {
+      throw new Error(`${doc.name} is not cut into a backbone by ${names.join(', ')} (${vecFrags.length} fragment(s))`);
+    }
+    const backbone = [...vecFrags].sort((a, b) => b.len - a.len)[0];
+    const cutEnds = (f) => f.left.end.type !== 'natural' && f.right.end.type !== 'natural';
+    const insertFrag =
+      !insertDoc.circular && insFrags.length >= 3
+        ? insFrags[1]
+        : [...insFrags].filter(cutEnds).sort((a, b) => b.len - a.len)[0];
+    if (!insertFrag) throw new Error(`Could not pick an insert from ${insertDoc.name}; cut it so both ends are enzyme ends`);
+    const result = restrictionClone({
+      backbone: { doc, fragment: backbone },
+      insert: { doc: insertDoc, fragment: insertFrag },
+      circular: doc.circular,
+    });
+    printClone(result, `Restriction cloning with ${names.join(' + ')}`);
+    if (out) {
+      saveDoc(result.doc, out);
+      console.log(`Wrote ${out}`);
+    }
+  } else if (cmd === 'gibson') {
+    const args = rest.slice();
+    const linear = args.includes('--linear');
+    const withoutFlags = args.filter((a) => a !== '--linear');
+    let out = null;
+    const oi = withoutFlags.findIndex((a) => a === '-o' || a === '--out');
+    if (oi >= 0) {
+      out = withoutFlags[oi + 1];
+      withoutFlags.splice(oi, 2);
+    }
+    if (!withoutFlags.length) {
+      throw new Error('Usage: bg gibson <fragment1> <fragment2> [fragment3 ...] [-o out] [--linear]');
+    }
+    const fragments = [doc, ...withoutFlags.map((p) => load(p))];
+    const result = gibsonAssemble(fragments, { circular: !linear, name: 'Gibson construct' });
+    printClone(result, `Gibson assembly${linear ? ' (linear)' : ''}`);
+    if (out) {
+      saveDoc(result.doc, out);
+      console.log(`Wrote ${out}`);
+    }
   } else if (cmd === 'convert') {
     const out = rest[0];
     if (!out) throw new Error('Give an output file name');
-    const ext = extname(out).toLowerCase();
-    if (ext === '.dna') writeFileSync(out, writeDna(doc, { bindingSitesFor: (p) => findBindingSites(doc.seq, doc.circular, p.seq) }));
-    else if (['.gb', '.gbk', '.genbank'].includes(ext)) writeFileSync(out, writeGenBank(doc));
-    else if (['.fasta', '.fa', '.fna'].includes(ext)) writeFileSync(out, writeFasta(doc));
-    else throw new Error(`Don't know how to write ${out}`);
+    saveDoc(doc, out);
     console.log(`Wrote ${out}`);
   } else throw new Error(`Unknown command "${cmd}". Run with --help.`);
 } catch (e) {

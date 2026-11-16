@@ -31,6 +31,11 @@ from the built-in example.
   bases above them.
 - **Panels** — features (add, edit, delete, ORFs), primers (binding sites, pair
   design, PCR), enzymes, digest with a simulated gel, and file details.
+- **Cloning** — cut a vector and an insert with the same enzymes, check that the
+  ends actually ligate (and whether the insert also fits backwards), and join
+  them into a new construct carrying features from both pieces. Gibson assembly
+  joins fragments that share terminal overlaps. Products keep a structured
+  cloning record and can render SnapGene's `HistoryTree` XML.
 - Undo/redo, several files open at once, light and dark themes.
 - **Your files come back.** What you had open is kept in the browser's own
   storage, so closing the tab and returning offers to reopen it, listing the
@@ -58,7 +63,7 @@ export PATH=/opt/homebrew/opt/node@24/bin:$PATH
 cd bublagene && npm test
 ```
 
-21 tests. Most run on their own; the `.dna` tests additionally read every
+39 tests. Most run on their own; the `.dna` tests additionally read every
 sample file shipped inside SnapGene, so they need its disk image mounted at
 `/Volumes/SnapGene`, or another folder given as `SNAPGENE_SAMPLES`:
 
@@ -72,10 +77,11 @@ What they check: reverse complement, translation, melting temperature, IUPAC
 searching across the origin, enzyme sites (including enzymes that cut outside
 their recognition site), digests, edits that keep features on the same bases,
 origin rotation, reverse complementing, ORF finding, primer binding, PCR,
-XML, GenBank and FASTA round trips, and `.dna` round trips over all 206 sample
-files. One test translates all 877 coding sequences in those files and compares
-each against the protein stored in the file itself; 874 agree exactly and the
-three that don't are listed in the test with the reason.
+restriction cloning and Gibson assembly (including two of SnapGene's own
+cloning products), XML, GenBank and FASTA round trips, and `.dna` round trips
+over all 206 sample files. One test translates all 877 coding sequences in those
+files and compares each against the protein stored in the file itself; 874 agree
+exactly and the three that don't are listed in the test with the reason.
 
 ## Use it
 
@@ -91,6 +97,8 @@ node tools/bg.mjs info "/Volumes/SnapGene/SnapGene.app/Contents/Resources/sample
 | `bg orfs <file> [minCodons]` | open reading frames on both strands |
 | `bg primers <file> <start..end> [Tm]` | design a primer pair for a region |
 | `bg pcr <file> <fwd> <rev>` | simulate PCR and describe the product |
+| `bg clone <vector> <insert> <enzyme,...> [out]` | cut both, ligate the insert, describe or save the construct |
+| `bg gibson <f1> <f2> [...] [-o out] [--linear]` | assemble fragments by shared terminal overlaps |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in SnapGene. Files may be `.dna`,
@@ -105,6 +113,38 @@ node tools/bg.mjs cut plasmid.dna EcoRI,BamHI,HindIII,NotI
 ```bash
 node tools/bg.mjs primers plasmid.dna 1653..2372
 ```
+
+```bash
+node tools/bg.mjs clone pUC57.dna insert.dna SalI,KpnI construct.dna
+```
+
+## Cloning
+
+`js/cloning.js` turns digested fragments into constructs. A fragment from
+`digest()` becomes a piece: its ends are checked, the insert is tried in both
+orientations, and the product carries every feature that survives the cuts —
+split at the junction, as SnapGene does when an MCS is replaced.
+
+```js
+import { checkLigation, restrictionClone } from './js/cloning.js';
+
+const backbone = { doc: vector, fragment: vectorFragments[0] };
+const insert = { doc: insertDoc, fragment: insertFragments[1] };
+
+const check = checkLigation({ backbone, insert });   // orientations, junctions, size
+const { doc } = restrictionClone({ backbone, insert });
+```
+
+Gibson assembly uses `gibsonAssemble([doc1, doc2, …])`, which infers the order
+and orientation from shared terminal overlaps (15 bp by default).
+
+Products keep `doc.cloning` (operation, parents, fragments, junctions and
+regenerated sites), and `historyTreeXML(doc)` renders SnapGene's `HistoryTree`
+schema. The product's Notes description also records the parents and enzymes,
+so a saved `.dna` keeps a readable provenance line. BublaGene does not write
+the 0x07 HistoryTree segment itself because SnapGene xz-compresses it and the
+browser has no xz encoder; an existing 0x07 segment is still passed through
+untouched on save.
 
 ## Working with .dna files
 
@@ -126,6 +166,7 @@ js/model.js            the document model and edits that keep features in place
 js/xml.js              a small XML parser and writer
 js/enzymes.js          ~90 restriction enzymes, site finding, digests, gel model
 js/primers.js          primer binding, design, PCR
+js/cloning.js          restriction cloning, Gibson assembly, cloning history
 js/formats/dna.js      SnapGene .dna
 js/formats/genbank.js  GenBank and FASTA
 js/ui/dom.js           DOM helpers (for the interface that isn't built yet)
@@ -134,7 +175,6 @@ tools/bg.mjs           the command line
 
 ## Not built
 
-- Cloning simulation (ligation, assembly).
 - The digest/gel and primer panels work but have had less testing than the map and sequence views.
 
 ## Licence

@@ -1,0 +1,356 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { newDocument, newId } from '../js/model.js';
+import { revcomp } from '../js/seq.js';
+import { ENZYME_BY_NAME, findSites, digest } from '../js/enzymes.js';
+import { readDna, writeDna } from '../js/formats/dna.js';
+import { parseXML } from '../js/xml.js';
+import {
+  endsCompatible, describeEnd, pieceFromFragment, checkLigation, restrictionClone,
+  assemblePieces, gibsonAssemble, historyTreeXML, cloningSummary,
+} from '../js/cloning.js';
+
+const feat = (name, start, end, strand = 1) => ({
+  id: newId(), name, type: 'misc_feature', strand, color: '#888',
+  segments: [{ start, end }], qualifiers: [], extra: {},
+});
+
+const cut = (doc, names) =>
+  names.flatMap((n) => findSites(doc.seq, doc.circular, ENZYME_BY_NAME[n]));
+
+test('ends ligate when overhangs match, not when they are reverse complements', () => {
+  assert.equal(endsCompatible({ type: '5', oh: 'AATT' }, { type: '5', oh: 'AATT' }), true);
+  assert.equal(endsCompatible({ type: '5', oh: 'aatt' }, { type: '5', oh: 'AATT' }), true);
+  assert.equal(endsCompatible({ type: '5', oh: 'AATT' }, { type: '5', oh: 'GATC' }), false);
+  assert.equal(endsCompatible({ type: '5', oh: 'AAGC' }, { type: '5', oh: 'GCTT' }), false);
+  assert.equal(endsCompatible({ type: '3', oh: 'TGCA' }, { type: '3', oh: 'TGCA' }), true);
+  assert.equal(endsCompatible({ type: 'blunt', oh: '' }, { type: 'blunt', oh: '' }), true);
+  assert.equal(endsCompatible({ type: 'blunt', oh: '' }, { type: '5', oh: 'AATT' }), false);
+  assert.equal(endsCompatible({ type: 'natural', oh: '' }, { type: 'natural', oh: '' }), false);
+  assert.equal(endsCompatible({ type: '5', oh: 'AATT' }, { type: '3', oh: 'AATT' }), false);
+  assert.match(describeEnd({ type: '5', oh: 'AATT' }), /5′ overhang AATT/);
+});
+
+test('restriction cloning: EcoRI + BamHI, insert goes in backwards', () => {
+  const vector = newDocument({
+    name: 'vector.dna',
+    seq: 'A'.repeat(40) + 'GAATTC' + 'C'.repeat(100) + 'GGATCC' + 'T'.repeat(30),
+    circular: true,
+  });
+  const insert = newDocument({
+    name: 'insert.dna',
+    seq: 'G'.repeat(20) + 'GAATTC' + 'A'.repeat(60) + 'GGATCC' + 'G'.repeat(20),
+    circular: false,
+  });
+  vector.features = [feat('vector core', 46, 146)];
+  insert.features = [feat('insert core', 26, 86)];
+  vector.features.push(feat('stuffer', 152, 182));
+
+  const vecFrags = digest(vector.seq, vector.circular, cut(vector, ['EcoRI', 'BamHI']));
+  const insFrags = digest(insert.seq, insert.circular, cut(insert, ['EcoRI', 'BamHI']));
+  const backbone = [...vecFrags].sort((a, b) => b.len - a.len)[0];
+  const insertPiece = insFrags[1];
+
+  const check = checkLigation({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertPiece },
+    circular: true,
+  });
+  assert.deepEqual(check.orientations, ['reverse']);
+  assert.equal(check.forward.compatible, false);
+  assert.equal(check.forward.productSize, 172);
+  assert.match(check.forward.problems.join(' '), /AATT.*GATC/);
+
+  const { doc, orientation, junctions } = restrictionClone({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertPiece },
+    circular: true,
+    name: 'construct',
+  });
+
+  const expected = 'AATTC' + 'C'.repeat(100) + 'G' + 'GATCC' + 'T'.repeat(60) + 'G';
+  assert.equal(orientation, 'reverse');
+  assert.equal(doc.seq, expected);
+  assert.equal(doc.seq.length, 172);
+  assert.equal(doc.circular, true);
+
+  const byName = Object.fromEntries(doc.features.map((f) => [f.name, f]));
+  assert.deepEqual(Object.keys(byName).sort(), ['insert core', 'vector core']);
+  assert.deepEqual([byName['vector core'].segments[0].start, byName['vector core'].segments[0].end], [5, 105]);
+  assert.deepEqual([byName['insert core'].segments[0].start, byName['insert core'].segments[0].end], [111, 171]);
+  assert.equal(byName['insert core'].strand, -1);
+
+  assert.equal(junctions.length, 2);
+  assert.equal(junctions[0].position, 106);
+  assert.ok(junctions[0].regeneratedSites.some((s) => s.name === 'BamHI' && s.pos === 106));
+  assert.ok(junctions[1].regeneratedSites.some((s) => s.name === 'EcoRI' && s.pos === 0));
+  assert.equal(doc.cloning.inputs[0].role, 'backbone');
+  assert.equal(doc.cloning.inputs[1].orientation, 'reverse');
+  assert.ok(doc.history.some((h) => h.action === 'Restriction cloning'));
+  assert.ok(doc.notes.modified);
+});
+
+test('restriction cloning: a site that can ligate both ways is reported', () => {
+  const vector = newDocument({
+    name: 'v.dna',
+    seq: 'A'.repeat(60) + 'GAATTC' + 'C'.repeat(60),
+    circular: true,
+  });
+  const insert = newDocument({
+    name: 'i.dna',
+    seq: 'G'.repeat(20) + 'GAATTC' + 'T'.repeat(40) + 'GAATTC' + 'G'.repeat(20),
+    circular: false,
+  });
+  const backbone = digest(vector.seq, true, cut(vector, ['EcoRI']))[0];
+  const insertPiece = digest(insert.seq, false, cut(insert, ['EcoRI']))[1];
+
+  const check = checkLigation({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertPiece },
+    circular: true,
+  });
+  assert.deepEqual(check.orientations, ['forward', 'reverse']);
+  assert.equal(check.preferred, 'forward');
+  assert.match(check.warnings.join(' '), /either orientation/);
+
+  const forward = restrictionClone({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertPiece },
+    circular: true,
+    orientation: 'forward',
+    name: 'fwd',
+  });
+  const reverse = restrictionClone({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertPiece },
+    circular: true,
+    orientation: 'reverse',
+    name: 'rev',
+  });
+  assert.equal(forward.doc.seq.length, 172);
+  assert.equal(reverse.doc.seq.length, 172);
+  assert.notEqual(forward.doc.seq, reverse.doc.seq);
+  assert.equal(
+    forward.doc.seq,
+    'AATTC' + 'C'.repeat(60) + 'A'.repeat(60) + 'G' + 'AATTC' + 'T'.repeat(40) + 'G',
+  );
+});
+
+test('an incompatible orientation is refused with the overhangs named', () => {
+  const vector = newDocument({ name: 'v', seq: 'A'.repeat(40) + 'GAATTC' + 'C'.repeat(100) + 'GGATCC' + 'T'.repeat(30), circular: true });
+  const insert = newDocument({ name: 'i', seq: 'G'.repeat(20) + 'GAATTC' + 'A'.repeat(60) + 'GGATCC' + 'G'.repeat(20), circular: false });
+  const backbone = [...digest(vector.seq, true, cut(vector, ['EcoRI', 'BamHI']))].sort((a, b) => b.len - a.len)[0];
+  const insertPiece = digest(insert.seq, false, cut(insert, ['EcoRI', 'BamHI']))[1];
+  assert.throws(
+    () => restrictionClone({
+      backbone: { doc: vector, fragment: backbone },
+      insert: { doc: insert, fragment: insertPiece },
+      circular: true,
+      orientation: 'forward',
+    }),
+    /cannot go in forward.*AATT.*GATC/i,
+  );
+});
+
+test('assemblePieces uses non-palindromic ends and rejects the wrong order', () => {
+  const mk = (name, seq, leftOh, rightOh) => ({
+    doc: { name, seq, circular: false, features: [], primers: [] },
+    source: { name, seq, circular: false, features: [], primers: [] },
+    fragment: null,
+    reverse: false,
+    left: { type: '5', oh: leftOh, enzyme: null },
+    right: { type: '5', oh: rightOh, enzyme: null },
+  });
+  const a = mk('A', 'AAAA', 'AAGC', 'AATG');
+  const b = mk('B', 'CCCC', 'AATG', 'AAGC');
+  const { doc } = assemblePieces([a, b], { circular: true, name: 'ab' });
+  assert.equal(doc.seq, 'AAAACCCC');
+  assert.equal(doc.circular, true);
+  assert.equal(doc.cloning.junctions.length, 2);
+
+  const wrong = mk('C', 'GGGG', 'AAGC', 'AATG');
+  assert.throws(() => assemblePieces([a, wrong], { circular: true }), /cannot join/);
+});
+
+test('Gibson assembly joins two fragments sharing terminal overlaps', () => {
+  const ovA = 'ACGTACGTACGTACGT';
+  const ovB = 'GGCCTTAAGGCCTTAA';
+  const f1 = newDocument({ name: 'f1', seq: ovA + 'A'.repeat(30) + ovB, circular: false });
+  const f2 = newDocument({ name: 'f2', seq: ovB + 'C'.repeat(30) + ovA, circular: false });
+  f1.features = [feat('A block', 16, 46)];
+  f2.features = [feat('C block', 16, 46)];
+
+  const { doc, junctions, warnings } = gibsonAssemble([f1, f2], { circular: true, minOverlap: 15, name: 'gibson' });
+  assert.equal(doc.seq, ovA + 'A'.repeat(30) + ovB + 'C'.repeat(30));
+  assert.equal(doc.seq.length, 92);
+  assert.equal(doc.circular, true);
+  assert.equal(junctions.length, 2);
+  assert.equal(junctions[0].position, 62);
+  assert.equal(junctions[0].overhang, ovB);
+  assert.equal(junctions[1].position, 92);
+  assert.equal(junctions[1].overhang, ovA);
+  assert.equal(warnings.length, 0);
+
+  const byName = Object.fromEntries(doc.features.map((f) => [f.name, f]));
+  assert.deepEqual([byName['A block'].segments[0].start, byName['A block'].segments[0].end], [16, 46]);
+  assert.deepEqual([byName['C block'].segments[0].start, byName['C block'].segments[0].end], [62, 92]);
+  assert.equal(doc.cloning.operation, 'gibsonAssembly');
+  assert.ok(doc.history.some((h) => h.action === 'Gibson assembly'));
+});
+
+test('Gibson assembly flips a fragment when the overlap requires it', () => {
+  const ov = 'TTGACCAGTTGACCAGT';
+  const f1 = newDocument({ name: 'left', seq: 'A'.repeat(20) + ov, circular: false });
+  const desired = newDocument({ name: 'right', seq: ov + 'C'.repeat(20), circular: false });
+  const flipped = newDocument({ name: 'right', seq: revcomp(desired.seq), circular: false });
+
+  const { doc, inputs } = gibsonAssemble([f1, flipped], { circular: false, minOverlap: 15, name: 'linear' });
+  assert.equal(doc.seq, 'A'.repeat(20) + ov + 'C'.repeat(20));
+  assert.equal(doc.circular, false);
+  assert.equal(inputs[1].orientation, 'reverse');
+});
+
+test('Gibson assembly reports when no overlap is found', () => {
+  const f1 = newDocument({ name: 'a', seq: 'A'.repeat(40), circular: false });
+  const f2 = newDocument({ name: 'b', seq: 'C'.repeat(40), circular: false });
+  assert.throws(() => gibsonAssemble([f1, f2], { circular: true, minOverlap: 15 }), /No assembly found/);
+});
+
+test('cloning history renders as a SnapGene HistoryTree', () => {
+  const vector = newDocument({ name: 'pUC.dna', seq: 'A'.repeat(40) + 'GAATTC' + 'C'.repeat(100) + 'GGATCC' + 'T'.repeat(30), circular: true });
+  const insert = newDocument({ name: 'gene.dna', seq: 'G'.repeat(20) + 'GAATTC' + 'A'.repeat(60) + 'GGATCC' + 'G'.repeat(20), circular: false });
+  vector.features = [feat('ori', 46, 146)];
+  insert.features = [feat('gene', 26, 86)];
+  const backbone = [...digest(vector.seq, true, cut(vector, ['EcoRI', 'BamHI']))].sort((a, b) => b.len - a.len)[0];
+  const insertPiece = digest(insert.seq, false, cut(insert, ['EcoRI', 'BamHI']))[1];
+  const { doc } = restrictionClone({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertPiece },
+    circular: true,
+    name: 'pUC-gene.dna',
+  });
+
+  const xml = historyTreeXML(doc);
+  assert.match(xml, /<HistoryTree>/);
+  assert.match(xml, /operation="insertFragment"/);
+  assert.match(xml, /name="pUC.dna"/);
+  assert.match(xml, /name="gene.dna"/);
+  assert.match(xml, /<RegeneratedSite name="BamHI" pos="106" siteCount="1"\/>/);
+  assert.match(xml, /manipulation="flipAndInsert"/);
+  const root = parseXML(xml);
+  assert.equal(root.tag, 'HistoryTree');
+  assert.equal(root.children[0].tag, 'Node');
+  assert.equal(root.children[0].attrs.seqLen, '172');
+  assert.equal(root.children[0].attrs.circular, '1');
+
+  const summary = cloningSummary(doc);
+  assert.equal(summary.size, 172);
+  assert.equal(summary.inputs.length, 2);
+  assert.equal(summary.junctions.length, 2);
+  assert.ok(summary.junctions[0].regenerated.includes('BamHI at 107'));
+  assert.equal(historyTreeXML(newDocument()), null);
+  assert.match(doc.notes.description, /Restriction cloning: .*pUC\.dna.*gene\.dna.*reversed/);
+  const round = readDna(writeDna(doc), 'round.dna');
+  assert.equal(round.seq, doc.seq);
+  assert.match(round.notes.description, /Restriction cloning: .*gene\.dna.*reversed/);
+});
+
+test('pieceFromFragment keeps feature coordinates and flips with the piece', () => {
+  const doc = newDocument({ name: 'x', seq: 'A'.repeat(10) + 'GAATTC' + 'C'.repeat(20) + 'GGATCC' + 'T'.repeat(10), circular: false });
+  doc.features = [feat('f', 20, 30)];
+  const frags = digest(doc.seq, false, cut(doc, ['EcoRI', 'BamHI']));
+  const middle = frags[1];
+  const forward = pieceFromFragment(doc, middle);
+  const reverse = pieceFromFragment(doc, middle, { reverse: true });
+  assert.equal(forward.doc.seq.length, reverse.doc.seq.length);
+  assert.ok(forward.doc.seq.includes('CCCCCCCCCCCCCCCCCCCCC'), 'forward piece carries the C block');
+  assert.ok(revcomp(reverse.doc.seq).includes('CCCCCCCCCCCCCCCCCCCCC'), 'reverse piece carries the bottom strand');
+  assert.equal(forward.left.oh, 'AATT');
+  assert.equal(forward.right.oh, 'GATC');
+  assert.equal(reverse.left.oh, 'GATC');
+  assert.equal(reverse.right.oh, 'AATT');
+  const f = forward.doc.features.find((x) => x.name === 'f');
+  assert.ok(f, 'feature inside the fragment is kept');
+  assert.equal(f.strand, 1);
+  assert.equal(reverse.doc.features.find((x) => x.name === 'f').strand, -1);
+});
+
+// ---- against the cloning products shipped with SnapGene 9 -------------------
+
+const SAMPLE_ROOT =
+  process.env.SNAPGENE_CLONING_SAMPLES ??
+  '/Volumes/SnapGene/SnapGene.app/Contents/Resources/sampleData/Sample project/2. Experimental Design';
+const RESTRICTION = '2. Restriction Cloning';
+const GOLDEN_GATE = '3. Golden Gate Assembly';
+const haveSamples = existsSync(join(SAMPLE_ROOT, RESTRICTION, '3. pUC57-mTAGBFP2.dna'));
+
+const loadSample = (dir, name) => readDna(readFileSync(join(SAMPLE_ROOT, dir, name)), name);
+
+function featureSignature(doc, offset = 0) {
+  const L = doc.seq.length;
+  return doc.features
+    .map((f) => {
+      const segs = f.segments.map((s) => {
+        const a = (s.start + offset) % L;
+        const raw = s.end + offset;
+        const b = raw % L || (raw > 0 ? L : 0);
+        return `${a}-${b}`;
+      });
+      return `${f.name}|${f.strand}|${segs.join(',')}`;
+    })
+    .sort();
+}
+
+function cloneSample(dir, vecName, insName, productName, enzymes) {
+  const vector = loadSample(dir, vecName);
+  const insert = loadSample(dir, insName);
+  const product = loadSample(dir, productName);
+  const cutsOf = (d) => enzymes.flatMap((n) => findSites(d.seq, d.circular, ENZYME_BY_NAME[n]));
+  const vecFrags = digest(vector.seq, vector.circular, cutsOf(vector));
+  const insFrags = digest(insert.seq, insert.circular, cutsOf(insert));
+  const backbone = [...vecFrags].sort((a, b) => b.len - a.len)[0];
+  const insertFrag =
+    !insert.circular && insFrags.length >= 3
+      ? insFrags[1]
+      : [...insFrags].sort((a, b) => b.len - a.len)[0];
+  const result = restrictionClone({
+    backbone: { doc: vector, fragment: backbone },
+    insert: { doc: insert, fragment: insertFrag },
+    circular: vector.circular,
+    name: productName,
+  });
+  return { result, product };
+}
+
+test('reproduces SnapGene restriction cloning (pUC57 + mTAGBFP)', { skip: !haveSamples }, () => {
+  const { result, product } = cloneSample(
+    RESTRICTION,
+    '1. pUC57.dna',
+    '2. mTAGBFP SalI, KpnI.dna',
+    '3. pUC57-mTAGBFP2.dna',
+    ['SalI', 'KpnI'],
+  );
+  assert.equal(result.doc.seq.length, product.seq.length);
+  assert.ok((product.seq + product.seq).includes(result.doc.seq), 'product is the same circle');
+  assert.equal(result.orientation, 'reverse');
+  const offset = product.seq.indexOf(result.doc.seq.slice(0, 60));
+  assert.ok(offset >= 0);
+  assert.deepEqual(featureSignature(result.doc, offset), featureSignature(product));
+  assert.ok(result.junctions.some((j) => j.regeneratedSites.some((s) => s.name === 'KpnI')));
+  assert.ok(result.junctions.some((j) => j.regeneratedSites.some((s) => s.name === 'SalI')));
+});
+
+test('reproduces SnapGene Golden Gate assembly (pGGA + mCherry)', { skip: !haveSamples }, () => {
+  const { result, product } = cloneSample(
+    GOLDEN_GATE,
+    '1. pGGA.dna',
+    '2. mCherry BsaI.dna',
+    '3. pGGA-mCherry.dna',
+    ['BsaI'],
+  );
+  assert.equal(result.doc.seq, product.seq);
+  assert.equal(result.orientation, 'forward');
+  assert.deepEqual(featureSignature(result.doc, 0), featureSignature(product));
+});
