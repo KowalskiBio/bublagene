@@ -1,4 +1,4 @@
-// ZTR reader, for the sequencing traces SnapGene stores inside a .dna file.
+// ZTR reader, for the sequencing traces stored inside a .dna file.
 //
 // A ZTR file is a header and a series of chunks. Each chunk's data is wrapped
 // in a chain of transforms, innermost last, each announcing itself with a

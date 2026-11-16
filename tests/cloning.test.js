@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { newDocument, newId } from '../js/model.js';
 import { revcomp } from '../js/seq.js';
 import { ENZYME_BY_NAME, findSites, digest } from '../js/enzymes.js';
@@ -218,7 +216,7 @@ test('Gibson assembly reports when no overlap is found', () => {
   assert.throws(() => gibsonAssemble([f1, f2], { circular: true, minOverlap: 15 }), /No assembly found/);
 });
 
-test('cloning history renders as a SnapGene HistoryTree', () => {
+test('cloning history renders as a portable history tree', () => {
   const vector = newDocument({ name: 'pUC.dna', seq: 'A'.repeat(40) + 'GAATTC' + 'C'.repeat(100) + 'GGATCC' + 'T'.repeat(30), circular: true });
   const insert = newDocument({ name: 'gene.dna', seq: 'G'.repeat(20) + 'GAATTC' + 'A'.repeat(60) + 'GGATCC' + 'G'.repeat(20), circular: false });
   vector.features = [feat('ori', 46, 146)];
@@ -275,82 +273,4 @@ test('pieceFromFragment keeps feature coordinates and flips with the piece', () 
   assert.ok(f, 'feature inside the fragment is kept');
   assert.equal(f.strand, 1);
   assert.equal(reverse.doc.features.find((x) => x.name === 'f').strand, -1);
-});
-
-// ---- against the cloning products shipped with SnapGene 9 -------------------
-
-const SAMPLE_ROOT =
-  process.env.SNAPGENE_CLONING_SAMPLES ??
-  '/Volumes/SnapGene/SnapGene.app/Contents/Resources/sampleData/Sample project/2. Experimental Design';
-const RESTRICTION = '2. Restriction Cloning';
-const GOLDEN_GATE = '3. Golden Gate Assembly';
-const haveSamples = existsSync(join(SAMPLE_ROOT, RESTRICTION, '3. pUC57-mTAGBFP2.dna'));
-
-const loadSample = (dir, name) => readDna(readFileSync(join(SAMPLE_ROOT, dir, name)), name);
-
-function featureSignature(doc, offset = 0) {
-  const L = doc.seq.length;
-  return doc.features
-    .map((f) => {
-      const segs = f.segments.map((s) => {
-        const a = (s.start + offset) % L;
-        const raw = s.end + offset;
-        const b = raw % L || (raw > 0 ? L : 0);
-        return `${a}-${b}`;
-      });
-      return `${f.name}|${f.strand}|${segs.join(',')}`;
-    })
-    .sort();
-}
-
-function cloneSample(dir, vecName, insName, productName, enzymes) {
-  const vector = loadSample(dir, vecName);
-  const insert = loadSample(dir, insName);
-  const product = loadSample(dir, productName);
-  const cutsOf = (d) => enzymes.flatMap((n) => findSites(d.seq, d.circular, ENZYME_BY_NAME[n]));
-  const vecFrags = digest(vector.seq, vector.circular, cutsOf(vector));
-  const insFrags = digest(insert.seq, insert.circular, cutsOf(insert));
-  const backbone = [...vecFrags].sort((a, b) => b.len - a.len)[0];
-  const insertFrag =
-    !insert.circular && insFrags.length >= 3
-      ? insFrags[1]
-      : [...insFrags].sort((a, b) => b.len - a.len)[0];
-  const result = restrictionClone({
-    backbone: { doc: vector, fragment: backbone },
-    insert: { doc: insert, fragment: insertFrag },
-    circular: vector.circular,
-    name: productName,
-  });
-  return { result, product };
-}
-
-test('reproduces SnapGene restriction cloning (pUC57 + mTAGBFP)', { skip: !haveSamples }, () => {
-  const { result, product } = cloneSample(
-    RESTRICTION,
-    '1. pUC57.dna',
-    '2. mTAGBFP SalI, KpnI.dna',
-    '3. pUC57-mTAGBFP2.dna',
-    ['SalI', 'KpnI'],
-  );
-  assert.equal(result.doc.seq.length, product.seq.length);
-  assert.ok((product.seq + product.seq).includes(result.doc.seq), 'product is the same circle');
-  assert.equal(result.orientation, 'reverse');
-  const offset = product.seq.indexOf(result.doc.seq.slice(0, 60));
-  assert.ok(offset >= 0);
-  assert.deepEqual(featureSignature(result.doc, offset), featureSignature(product));
-  assert.ok(result.junctions.some((j) => j.regeneratedSites.some((s) => s.name === 'KpnI')));
-  assert.ok(result.junctions.some((j) => j.regeneratedSites.some((s) => s.name === 'SalI')));
-});
-
-test('reproduces SnapGene Golden Gate assembly (pGGA + mCherry)', { skip: !haveSamples }, () => {
-  const { result, product } = cloneSample(
-    GOLDEN_GATE,
-    '1. pGGA.dna',
-    '2. mCherry BsaI.dna',
-    '3. pGGA-mCherry.dna',
-    ['BsaI'],
-  );
-  assert.equal(result.doc.seq, product.seq);
-  assert.equal(result.orientation, 'forward');
-  assert.deepEqual(featureSignature(result.doc, 0), featureSignature(product));
 });

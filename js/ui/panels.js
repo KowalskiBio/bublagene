@@ -289,7 +289,7 @@ function gel(sizes, ladderName, agarose) {
 
 // What else a .dna file carries, in the reader's terms rather than the format's.
 // Anything not listed here is either shown in BublaGene already or a search
-// cache that SnapGene rebuilds, and neither is worth mentioning.
+// cache the format rebuilds, and neither is worth mentioning.
 const CARRIED = {
   0x07: ['the cloning history', 'cloning histories'],
   0x0b: ['an earlier version of the sequence', 'earlier versions of the sequence'],

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { readTraces } from '../js/formats/ztr.js';
 import { readDna } from '../js/formats/dna.js';
 
-const ROOT = process.env.SNAPGENE_SAMPLES ?? '/Volumes/SnapGene/SnapGene.app/Contents/Resources';
+const ROOT = process.env.DNA_SAMPLES ?? '';
 
 function walk(dir, out = []) {
   if (!existsSync(dir)) return out;

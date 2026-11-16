@@ -1,7 +1,7 @@
 // BublaGene document model.
 //
 // doc = {
-//   id, name, seq (uppercase string), circular, flags (SnapGene flag byte),
+//   id, name, seq (uppercase string), circular, flags (format flag byte),
 //   features: [{ id, name, type, strand: 1|-1|0, color,
 //                segments: [{start, end, color?, name?, extra?}], qualifiers: [{name, values:[{kind, value}]}], extra }],
 //   primers:  [{ id, name, seq, description, extra }],
@@ -74,8 +74,8 @@ export function featureLength(f, L) {
   return f.segments.reduce((n, s) => n + rangeLength(s, L), 0);
 }
 
-// Is this segment part of the coding sequence? SnapGene marks introns and other
-// skipped stretches with type="gap"; everything else counts.
+// Is this segment part of the coding sequence? The format marks introns and
+// other skipped stretches with type="gap"; everything else counts.
 export const isCodingSegment = (s) => s.extra?.type !== 'gap';
 
 // Sequence of a feature read 5'->3' in its own direction, over the whole span
@@ -84,10 +84,10 @@ export function featureSequence(doc, f) {
   return joinSegments(doc, f, f.segments);
 }
 
-// How many bases to skip before the first codon. SnapGene stores this as
+// How many bases to skip before the first codon. The format stores this as
 // `readingFrame` on the feature (±1, ±2, ±3; the sign only marks the strand),
 // matching the GenBank `codon_start` qualifier. Verified against the stored
-// translations of 878 CDS features in the SnapGene 9 sample files.
+// translations of 878 CDS features in the sample corpus.
 export function frameOffset(f) {
   const rf = Number(f.extra?.readingFrame);
   if (Number.isFinite(rf) && rf) return Math.abs(rf) - 1;

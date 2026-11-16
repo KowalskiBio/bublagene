@@ -1,5 +1,5 @@
-// Round-trip tests against real SnapGene files. Point SNAPGENE_SAMPLES at a
-// folder of .dna files (defaults to the mounted SnapGene 9 disk image).
+// Round-trip tests against real .dna files. Point DNA_SAMPLES at a folder of
+// .dna files.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -9,7 +9,7 @@ import { replaceRange, codingSequence } from '../js/model.js';
 import { findBindingSites } from '../js/primers.js';
 import { translate } from '../js/seq.js';
 
-const ROOT = process.env.SNAPGENE_SAMPLES ?? '/Volumes/SnapGene/SnapGene.app/Contents/Resources';
+const ROOT = process.env.DNA_SAMPLES ?? '';
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
@@ -57,7 +57,7 @@ test('every sample .dna file reads, writes and reads back identically', { skip: 
   assert.equal(checked, files.length);
 });
 
-// Checks splicing (gap segments) and the reading-frame offset against SnapGene's
+// Checks splicing (gap segments) and the reading-frame offset against the
 // own stored protein sequences. 874 of 877 agree. The three exceptions are the
 // AmpR feature in the three pAd Gateway vectors, where the span drawn in the
 // file is one codon longer than the protein its GenBank annotation carries;

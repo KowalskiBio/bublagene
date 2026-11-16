@@ -11,7 +11,7 @@
 //   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
 //   bg convert   <file> <out.gb|.fasta|.dna>
 //
-// Files may be .dna (SnapGene), .gb/.gbk/.genbank, or .fasta/.fa.
+// Files may be .dna (binary), .gb/.gbk/.genbank, or .fasta/.fa.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename, extname } from 'node:path';
@@ -81,7 +81,7 @@ function info(doc) {
   }
   const segs = describeSegments(doc);
   if (segs.length) {
-    console.log('\nSnapGene segments in the file');
+    console.log('\nContainer segments in the file');
     for (const s of segs) console.log(`  0x${s.type.toString(16).padStart(2, '0')}  ${pad(s.name, 32)} ${num(s.bytes)} bytes`);
   }
 }

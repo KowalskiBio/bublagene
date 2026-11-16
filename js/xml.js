@@ -98,7 +98,7 @@ export function toXML(node, { declaration = false } = {}) {
   return (declaration ? '<?xml version="1.0"?>' : '') + out.join('');
 }
 
-// SnapGene stores rich text as "<html><body>…</body></html>"; strip to plain text.
+// Rich text is stored as "<html><body>…</body></html>"; strip to plain text.
 export function htmlToText(s) {
   if (!s) return '';
   return decodeEntities(s.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')).trim();

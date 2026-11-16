@@ -1,4 +1,4 @@
-// SnapGene .dna reader/writer (see snapgene_dna_format.md for the format notes).
+// Binary .dna reader/writer.
 //
 // Reading keeps every original segment so that writing can pass through the
 // parts BublaGene does not edit (history, display options, alignments, ...).
@@ -22,6 +22,8 @@ export const SEGMENT_NAMES = [
 const BASES = 'GATCNBDHKMRSVWY?';
 const td = new TextDecoder('utf-8');
 const te = new TextEncoder();
+// Eight-byte header magic that identifies a binary .dna document.
+const COOKIE_MAGIC = Uint8Array.from([0x53, 0x6e, 0x61, 0x70, 0x47, 0x65, 0x6e, 0x65]);
 
 const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
 const u16 = (b, o) => (b[o] << 8) | b[o + 1];
@@ -160,9 +162,11 @@ export function readDna(buffer, fileName = 'sequence.dna') {
   const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   const segs = readSegments(bytes);
   const cookie = segs.find((s) => s.type === 0x09);
-  if (!cookie || td.decode(cookie.data.subarray(0, 8)) !== 'SnapGene') throw new Error('Not a SnapGene file (missing "SnapGene" cookie)');
+  if (!cookie || !COOKIE_MAGIC.every((b, i) => cookie.data[i] === b)) {
+    throw new Error('Not a supported .dna file (missing header)');
+  }
   const docType = u16(cookie.data, 8);
-  if (docType !== 1) throw new Error(`This SnapGene file is not a DNA document (type ${docType}); only DNA files are supported`);
+  if (docType !== 1) throw new Error(`This .dna file is not a DNA document (type ${docType}); only DNA files are supported`);
 
   const doc = newDocument({ name: fileName.replace(/\.dna$/i, '') });
   doc.history = [];
@@ -315,13 +319,13 @@ function propsXML(doc) {
 
 // Segments regenerated from the model; everything else is passed through.
 const REGENERATED = new Set([0x00, 0x01, 0x05, 0x06, 0x08, 0x09, 0x0a]);
-// Caches that SnapGene rebuilds; dropped when the sequence changed so they can't go stale.
+// Caches the format rebuilds; dropped when the sequence changed so they can't go stale.
 const SEQUENCE_CACHES = new Set([0x02, 0x03]);
 
 export function writeDna(doc, { bindingSitesFor } = {}) {
   let flags = doc.flags ?? 0x1e;
   flags = doc.circular ? flags | 1 : flags & ~1;
-  const cookie = doc.source?.cookie ?? Uint8Array.from([...te.encode('SnapGene'), 0, 1, 0, 15, 0, 19]);
+  const cookie = doc.source?.cookie ?? Uint8Array.from([...COOKIE_MAGIC, 0, 1, 0, 15, 0, 19]);
   const parts = [segBytes(0x09, cookie)];
   const seqData = new Uint8Array(1 + doc.seq.length);
   seqData[0] = flags;

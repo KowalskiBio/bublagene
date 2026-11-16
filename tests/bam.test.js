@@ -1,5 +1,5 @@
 // The BAM reader is checked against samtools' own output for the same file,
-// taken from the alignment inside a real SnapGene document.
+// taken from the alignment inside a real .dna document.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
@@ -8,8 +8,8 @@ import { execFileSync } from 'node:child_process';
 import { readBam, alignToReference, referenceSpan } from '../js/formats/bam.js';
 import { readDna } from '../js/formats/dna.js';
 
-const ROOT = process.env.SNAPGENE_SAMPLES ?? '/Volumes/SnapGene/SnapGene.app/Contents/Resources';
-const SAMTOOLS = process.env.SAMTOOLS ?? join(ROOT, 'Tools/samtools/samtools');
+const ROOT = process.env.DNA_SAMPLES ?? '';
+const SAMTOOLS = process.env.SAMTOOLS;
 
 function walk(dir, out = []) {
   if (!existsSync(dir)) return out;
@@ -48,7 +48,7 @@ test('reads every alignment in the sample files', { skip: !alignments.length }, 
   }
 });
 
-// samtools ships inside SnapGene; when it is there, compare field by field
+// when samtools is available, compare field by field
 const haveSamtools = existsSync(SAMTOOLS);
 
 test('matches samtools field for field', { skip: !alignments.length || !haveSamtools ? 'samtools not available' : false }, async () => {

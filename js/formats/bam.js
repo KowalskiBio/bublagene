@@ -1,4 +1,4 @@
-// BAM reader, for the aligned reads SnapGene stores inside a .dna file.
+// BAM reader, for the aligned reads stored inside a .dna file.
 //
 // BAM is a BGZF stream: a run of gzip members, each carrying its own compressed
 // size in an extra field. The blocks are split on that size and inflated one at

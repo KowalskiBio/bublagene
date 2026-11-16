@@ -523,7 +523,7 @@ function welcome() {
     h('button', { class: 'btn primary', onclick: () => el('fileInput').click() }, 'Choose a file…'));
   const box = h('div', { class: 'welcome' },
     h('h1', {}, 'A plasmid map in the browser'),
-    h('p', {}, 'Open a SnapGene .dna, GenBank or FASTA file to see its map, sequence, features and cut sites. Files stay on this computer.'),
+    h('p', {}, 'Open a .dna, GenBank or FASTA file to see its map, sequence, features and cut sites. Files stay on this computer.'),
     drop,
     h('div', { class: 'group' },
       h('button', { class: 'btn', onclick: () => openDoc(exampleDocument()) }, 'Open the example fragment'),

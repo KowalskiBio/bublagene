@@ -15,11 +15,9 @@
 //
 // Coordinates are 0-based end-exclusive everywhere, as in the rest of BublaGene.
 //
-// SnapGene records the provenance of a construct as a `<HistoryTree>` (an
-// xz-compressed 0x07 segment in .dna files; checked against the restriction
-// cloning and Golden Gate products in the SnapGene 9 sample data). The same
-// information is kept on the product document as `doc.cloning`, and
-// `historyTreeXML()` renders it in SnapGene's schema.
+// A construct keeps `doc.cloning`, a structured record of what it was built
+// from (operation, parents, fragments and junctions). `historyTreeXML()` renders
+// it in the binary format's history-tree schema.
 
 import { revcomp, mod, subseq, rangeLength, inRange } from './seq.js';
 import { newDocument, newId, addHistory } from './model.js';
@@ -103,8 +101,7 @@ function mapFeatures(doc, from, len, circular, reverse) {
     if (!pieces.length) continue;
     pieces.sort((x, y) => x.start - y.start);
     // Segments of one feature stay together across designed gaps (introns), but
-    // a single segment cut by the enzyme becomes separate features, as SnapGene
-    // does when the MCS is replaced.
+    // a single segment cut by the enzyme becomes separate annotations.
     const runs = [];
     for (const p of pieces) {
       const run = runs[runs.length - 1];
@@ -703,9 +700,9 @@ function rangeAttr(start, end) {
   return `${start}..${Math.max(start, end - 1)}`;
 }
 
-// Render doc.cloning as SnapGene's HistoryTree XML (the content of the 0x07
-// segment, which SnapGene stores xz-compressed). Returns null when the document
-// has no cloning record.
+// Render doc.cloning as the binary format's history-tree XML (the content of its
+// 0x07 segment, which the format stores compressed). Returns null when the
+// document has no cloning record.
 export function historyTreeXML(doc) {
   const c = doc?.cloning;
   if (!c) return null;
@@ -719,8 +716,8 @@ export function historyTreeXML(doc) {
     kids.push(el('RegeneratedSite', { name: site.name, pos: site.pos, siteCount: site.siteCount ?? 1 }));
   }
 
-  // Display-only: SnapGene trims the overhang bases from these ranges; the
-  // pieces' full extents are accurate enough for recolouring a map.
+  // Display-only: the file format trims the overhang bases from these ranges;
+  // the pieces' full extents are accurate enough for recolouring a map.
   const ranges = c.inputs.map((inp, i) =>
     el('ColorRange', { range: rangeAttr(inp.piece.start, inp.piece.end), colors: i === 0 ? 'black' : 'red' }),
   );
