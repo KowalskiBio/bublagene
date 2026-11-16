@@ -149,7 +149,10 @@ const api = {
   setSelection(sel) { state.selection = sel; render(); },
   focusFeature(f) {
     state.highlight = state.highlight === f.id ? null : f.id;
-    if (state.highlight) state.selection = { start: featureSpan(f).start, end: featureSpan(f).end };
+    if (state.highlight) {
+      state.selection = { start: featureSpan(f).start, end: featureSpan(f).end };
+      state.panel = 'Features'; // so the details appear in the sidebar
+    }
     render();
   },
   toggleEnzyme(name) {
@@ -355,6 +358,8 @@ function openContextMenu(ev) {
 }
 
 function renderView(doc) {
+  // keep the reader where they were: rebuilding the view resets its scroll
+  const wasScrolled = state.view === 'seq' ? el('view').scrollTop : 0;
   const view = clear(el('view'));
   if (!doc) { view.append(welcome()); return; }
   const sites = shownSites(doc);
@@ -382,6 +387,9 @@ function renderView(doc) {
     });
     view.append(sv);
     view.onscroll = () => sv.onScroll?.();
+    if (wasScrolled) {
+      requestAnimationFrame(() => { view.scrollTop = wasScrolled; sv.onScroll?.(); });
+    }
   }
 }
 

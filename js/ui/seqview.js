@@ -9,8 +9,11 @@ const NUM_W = 62;      // gutter for position numbers
 const CHAR_W = 8.42;   // measured below; IBM Plex Mono at 13px
 const GROUP = 10;
 
+const LABEL_CH = 5.75; // width of one character at the 10px label size
+const labelWidth = (text) => text.length * LABEL_CH + 8;
+
 export function sequenceView(doc, opts = {}) {
-  const { selection, onSelect, showTranslation = true, showComplement = true, sites = [], highlight } = opts;
+  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showComplement = true, sites = [], highlight } = opts;
   const L = doc.seq.length;
   // The view owns the selection while the pointer is down, so that dragging
   // never has to rebuild this element (which would drop the pointer capture).
@@ -66,6 +69,25 @@ export function sequenceView(doc, opts = {}) {
     return map;
   }
 
+  // Lay the cut labels for one line into rows, so that two sites a few bases
+  // apart do not print over each other.
+  function packSites(lineIdx) {
+    const from = lineIdx * state.perLine;
+    const to = Math.min(L, from + state.perLine);
+    const ends = [];
+    const placed = [];
+    sites.forEach((st, idx) => {
+      if (st.top <= from || st.top > to) return;
+      const cx = NUM_W + (st.top - from) * charW;
+      const w = labelWidth(st.enzyme.name);
+      let row = 0;
+      while (ends[row] !== undefined && ends[row] > cx) row++;
+      ends[row] = cx + w;
+      placed.push({ st, idx, cx, row });
+    });
+    return placed;
+  }
+
   function buildLine(i) {
     const from = i * state.perLine;
     const to = Math.min(L, from + state.perLine);
@@ -73,15 +95,24 @@ export function sequenceView(doc, opts = {}) {
     const line = h('div', { class: 'seqline', style: { position: 'absolute', left: 0, right: 0, top: `${i * state.lineH}px`, height: `${state.lineH}px` } });
     let y = 0;
 
-    // enzyme cuts above the line
-    const lineSites = sites.filter((st) => st.top > from && st.top <= to);
+    // enzyme cuts above the line, stacked so that close ones stay readable
     if (sites.length) {
-      for (const st of lineSites) {
-        const cx = NUM_W + (st.top - from) * charW;
-        line.append(h('div', { class: 'cutlabel', style: { left: `${cx + 2}px`, top: '0px' } }, st.enzyme.name));
-        line.append(h('div', { class: 'cutmark', style: { left: `${cx}px`, top: '12px', height: '30px' } }));
+      const rows = state.siteRows;
+      const placed = packSites(i);
+      const block = rows * 12 + 2;
+      const strands = showComplement ? 34 : 17;
+      for (const { st, idx, cx, row } of placed) {
+        const top = (rows - 1 - row) * 12;
+        line.append(h('div', {
+          class: 'cutlabel', dataset: { site: String(idx) }, title: `${st.enzyme.name} cuts after ${st.top}`,
+          style: { left: `${cx + 2}px`, top: `${top}px` },
+        }, st.enzyme.name));
+        line.append(h('div', {
+          class: 'cutmark',
+          style: { left: `${cx}px`, top: `${top + 11}px`, height: `${block + strands - top - 11}px` },
+        }));
       }
-      y += 14;
+      y += block;
     }
 
     line.append(h('div', { class: 'num', style: { top: `${y + 2}px` } }, fmt(from + 1)));
@@ -125,21 +156,39 @@ export function sequenceView(doc, opts = {}) {
       }
     }
 
-    // feature bars
+    // feature bars; a name too wide for its bar is printed beside it instead of
+    // being clipped
+    const lineWidth = NUM_W + state.perLine * charW;
     for (const { f, s0, s1, startsHere, gap } of featuresOnLine(from, to)) {
-      line.append(h('div', {
+      const left = NUM_W + (s0 - from) * charW;
+      const width = Math.max(2, (s1 - s0) * charW);
+      const dim = highlight && highlight !== f.id ? 0.4 : 1;
+      const bar = h('div', {
         class: 'fbar',
         title: f.name,
         dataset: { feature: f.id },
         style: {
-          left: `${NUM_W + (s0 - from) * charW}px`,
-          width: `${Math.max(2, (s1 - s0) * charW)}px`,
-          top: `${y}px`,
+          left: `${left}px`, width: `${width}px`, top: `${y}px`,
           background: gap ? 'transparent' : f.color,
           borderTop: gap ? '2px dotted var(--muted)' : 'none',
-          opacity: highlight && highlight !== f.id ? 0.4 : 1,
+          opacity: dim,
         },
-      }, gap ? '' : (startsHere ? `${f.strand === -1 ? '◀ ' : ''}${f.name}${f.strand === 1 ? ' ▶' : ''}` : '')));
+      });
+      line.append(bar);
+      if (!gap && startsHere) {
+        const text = `${f.strand === -1 ? '◀ ' : ''}${f.name}${f.strand === 1 ? ' ▶' : ''}`;
+        const need = labelWidth(text);
+        if (need <= width) {
+          bar.textContent = text;
+        } else {
+          const after = left + width + 4;
+          const x = after + need <= lineWidth ? after : Math.max(NUM_W, left - need - 2);
+          line.append(h('div', {
+            class: 'foutside', title: f.name, dataset: { feature: f.id },
+            style: { left: `${x}px`, top: `${y}px`, color: f.color, opacity: dim },
+          }, text));
+        }
+      }
       y += 15;
     }
     return line;
@@ -170,17 +219,23 @@ export function sequenceView(doc, opts = {}) {
       if (bars[i] > maxBars) maxBars = bars[i];
       if (aas[i] > maxAA) maxAA = aas[i];
     }
+    let siteRows = 0;
+    if (sites.length) {
+      for (let i = 0; i < total; i++) siteRows = Math.max(siteRows, packSites(i).reduce((n, p) => Math.max(n, p.row + 1), 0));
+    }
+    state.siteRows = Math.max(1, siteRows);
     const strands = 1 + (showComplement ? 1 : 0);
-    return Math.round((sites.length ? 14 : 0) + strands * 17 + maxAA * 14 + maxBars * 15 + 10);
+    return Math.round((sites.length ? state.siteRows * 12 + 2 : 0) + strands * 17 + maxAA * 14 + maxBars * 15 + 10);
   }
 
   function layout() {
     charW = probe.getBoundingClientRect().width / 100 || CHAR_W;
     const avail = wrap.clientWidth - NUM_W - 24;
     const perLine = Math.max(GROUP, Math.floor(avail / charW / GROUP) * GROUP);
+    const was = state.perLine;
+    state.perLine = perLine;           // lineHeight measures against this width
     const lineH = lineHeight();
-    if (perLine === state.perLine && lineH === state.lineH && state.first >= 0) return false;
-    state.perLine = perLine;
+    if (perLine === was && lineH === state.lineH && state.first >= 0) return false;
     state.lineH = lineH;
     state.first = -1;
     inner.style.height = `${Math.ceil(L / perLine) * lineH}px`;
@@ -214,10 +269,14 @@ export function sequenceView(doc, opts = {}) {
   };
   const rangeFrom = (p) => (p === anchor ? null : { start: Math.min(anchor, p), end: Math.max(anchor, p) });
 
+  let downOn = null;
   wrap.addEventListener('pointerdown', (ev) => {
     if (ev.button !== 0) return;
+    downOn = ev.target.closest?.('[data-feature], [data-site]') ?? null;
     anchor = posAt(ev);
-    wrap.setPointerCapture(ev.pointerId);
+    // capture keeps the drag alive outside the element; not every pointer can be
+    // captured, and failing to is not a reason to drop the selection
+    try { wrap.setPointerCapture(ev.pointerId); } catch { /* carry on uncaptured */ }
     ev.preventDefault();
   });
   wrap.addEventListener('pointermove', (ev) => {
@@ -230,7 +289,20 @@ export function sequenceView(doc, opts = {}) {
   const finish = (ev) => {
     if (anchor === null) return;
     const next = rangeFrom(posAt(ev));
+    const clicked = downOn;
     anchor = null;
+    downOn = null;
+    // a click that did not drag, on a feature bar, its name or a cut label,
+    // selects that thing rather than clearing the selection
+    if (!next && clicked) {
+      const fid = clicked.getAttribute('data-feature');
+      if (fid) {
+        const f = doc.features.find((x) => x.id === fid);
+        if (f && onPick) { onPick(f); return; }
+      }
+      const idx = clicked.getAttribute('data-site');
+      if (idx !== null && sites[Number(idx)] && onPickSite) { onPickSite(sites[Number(idx)]); return; }
+    }
     wrap.setSelection(next);
     onSelect?.(next, { live: false });
   };

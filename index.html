@@ -189,8 +189,18 @@ table.data tr:hover td { background: var(--sunk); }
 .seqline .fbar { position: absolute; height: 13px; border-radius: 3px; font-size: 10px; color: #fff;
   overflow: hidden; white-space: nowrap; padding: 0 3px; line-height: 13px; }
 .seqline .aa { position: absolute; color: var(--muted); font-size: 11px; white-space: pre; }
-.seqline .cutmark { position: absolute; width: 1px; background: var(--danger); }
-.seqline .cutlabel { position: absolute; font-size: 10px; color: var(--danger); white-space: nowrap; }
+.seqline .cutmark { position: absolute; width: 1px; background: var(--danger); opacity: .65; }
+.seqline .cutlabel {
+  position: absolute; font-size: 10px; line-height: 11px; color: var(--danger);
+  white-space: nowrap; cursor: pointer;
+}
+.seqline .cutlabel:hover { text-decoration: underline; }
+/* a feature name that will not fit inside its bar, printed next to it */
+.seqline .foutside {
+  position: absolute; font-size: 10px; line-height: 13px; white-space: nowrap;
+  cursor: pointer; font-family: var(--font-sans);
+}
+.seqline .fbar { cursor: pointer; }
 
 /* ---- map ---- */
 .mapwrap { display: grid; place-items: center; padding: 12px; height: 100%; min-height: 420px; }
