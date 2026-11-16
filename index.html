@@ -22,6 +22,7 @@
   --select: #f2d492;
   --select-line: #b8860b;
   --danger: #9b2c2c;
+  --mismatch: #b45309;
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --rail: 340px;
@@ -40,6 +41,7 @@
     --select: #5a4a1f;
     --select-line: #d8b14a;
     --danger: #f08a8a;
+    --mismatch: #f0b429;
     color-scheme: dark;
   }
 }
@@ -55,6 +57,7 @@
   --select: #5a4a1f;
   --select-line: #d8b14a;
   --danger: #f08a8a;
+  --mismatch: #f0b429;
   color-scheme: dark;
 }
 
@@ -195,6 +198,19 @@ table.data tr:hover td { background: var(--sunk); }
   white-space: nowrap; cursor: pointer;
 }
 .seqline .cutlabel:hover { text-decoration: underline; }
+/* aligned sequencing reads */
+.seqline .readrow { position: absolute; white-space: pre; font-size: 13px; }
+.seqline .readrow .match { color: var(--muted); opacity: .55; }
+.seqline .readrow .mis { color: var(--mismatch); font-weight: 600; }
+.seqline .readrow .del { color: var(--danger); }
+.seqline .readname {
+  position: absolute; left: 0; width: 58px; text-align: right; font-size: 9.5px; line-height: 15px;
+  color: var(--muted); font-family: var(--font-sans); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.seqline .insmark {
+  position: absolute; width: 2px; height: 14px; background: var(--mismatch); border-radius: 1px;
+}
 /* a feature name that will not fit inside its bar, printed next to it */
 .seqline .foutside {
   position: absolute; font-size: 10px; line-height: 13px; white-space: nowrap;

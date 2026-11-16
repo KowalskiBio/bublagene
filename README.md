@@ -24,6 +24,9 @@ from the built-in example.
   it into a forward or reverse primer; design a pair; add a feature; delete or
   replace the bases; or make it the start of a circular sequence. Right-clicking
   a feature adds its own actions on top.
+- **Aligned reads** — sequencing reads stored in a `.dna` file are decoded and
+  drawn under the reference, matches dimmed to dots so mismatches and insertions
+  stand out. The BAM reader is checked field by field against samtools.
 - **Panels** — features (add, edit, delete, ORFs), primers (binding sites, pair
   design, PCR), enzymes, digest with a simulated gel, and file details.
 - Undo/redo, several files open at once, light and dark themes.
@@ -131,6 +134,7 @@ tools/bg.mjs           the command line
 
 - Cloning simulation (ligation, assembly).
 - The digest/gel and primer panels work but have had less testing than the map and sequence views.
+- Trace chromatograms (ZTR) are kept but not drawn; only the aligned reads are shown.
 
 ## Licence
 

@@ -307,7 +307,8 @@ const CARRIED = {
   0x17: ['an embedded file', 'embedded files'],
   0x19: ['an alignment', 'alignments'],
   0x1a: ['an edited alignment', 'edited alignments'],
-  0x1b: ['aligned sequencing reads', 'sets of aligned sequencing reads'],
+  // 0x1b, the aligned reads, is shown in the sequence view, so it is not listed
+  // here among the things BublaGene cannot display
   0x1c: ['which enzymes are shown', 'records of which enzymes are shown'],
   0x1d: ['an edit to an earlier version', 'edits to earlier versions'],
   0x22: ['a secondary-structure prediction', 'secondary-structure predictions'],
@@ -334,9 +335,9 @@ function fileContents(el, doc) {
       list.append(h('li', {}, n > 1 ? `${fmt(n)} ${many}` : one));
     }
     el.append(list);
-    if ([...counts.keys()].some((t) => t >= 0x10 && t <= 0x1b)) {
+    if ([...counts.keys()].some((t) => t === 0x10 || t === 0x12)) {
       el.append(h('p', { class: 'sub', style: { marginTop: '8px' } },
-        'Open it in SnapGene to look at the sequencing data.'));
+        'The aligned reads are shown in the sequence view; open the file in SnapGene for the trace chromatograms.'));
     }
   }
 

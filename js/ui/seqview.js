@@ -13,7 +13,7 @@ const LABEL_CH = 5.75; // width of one character at the 10px label size
 const labelWidth = (text) => text.length * LABEL_CH + 8;
 
 export function sequenceView(doc, opts = {}) {
-  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showComplement = true, sites = [], highlight } = opts;
+  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showComplement = true, sites = [], highlight, reads = [] } = opts;
   const L = doc.seq.length;
   // The view owns the selection while the pointer is down, so that dragging
   // never has to rebuild this element (which would drop the pointer capture).
@@ -139,6 +139,37 @@ export function sequenceView(doc, opts = {}) {
       y += 17;
     }
 
+    // aligned sequencing reads, directly under the strands they align to
+    for (const rd of reads) {
+      const end = rd.start + rd.chars.length;
+      if (end <= from || rd.start >= to) continue;
+      const row = h('div', { class: 'readrow', style: { left: `${NUM_W}px`, top: `${y}px` } });
+      const runs = [];
+      let run = null;
+      for (let p = from; p < to; p++) {
+        let ch = ' ';
+        let cls = 'blank';
+        if (p >= rd.start && p < end) {
+          const c = rd.chars[p - rd.start];
+          if (c === '-') { ch = '-'; cls = 'del'; } else if (c === doc.seq[p]) { ch = '·'; cls = 'match'; } else { ch = c; cls = 'mis'; }
+        }
+        if (run && run.cls === cls) run.text += ch;
+        else { run = { cls, text: ch }; runs.push(run); }
+      }
+      for (const r of runs) row.append(h('span', { class: r.cls }, r.text));
+      line.append(h('div', { class: 'readname', style: { top: `${y}px` }, title: `${rd.label}${rd.reverse ? ' (reverse)' : ''}` },
+        `${rd.reverse ? '◀' : '▶'} ${rd.label}`));
+      line.append(row);
+      for (const [at, bases] of rd.insertions) {
+        if (at < from || at >= to) continue;
+        line.append(h('div', {
+          class: 'insmark', title: `${bases.length} base${bases.length > 1 ? 's' : ''} inserted: ${bases}`,
+          style: { left: `${NUM_W + (at - from) * charW - 1}px`, top: `${y}px` },
+        }));
+      }
+      y += 15;
+    }
+
     // translations
     if (showTranslation) {
       for (const f of doc.features.filter((x) => x.type === 'CDS')) {
@@ -224,8 +255,16 @@ export function sequenceView(doc, opts = {}) {
       for (let i = 0; i < total; i++) siteRows = Math.max(siteRows, packSites(i).reduce((n, p) => Math.max(n, p.row + 1), 0));
     }
     state.siteRows = Math.max(1, siteRows);
+    let maxReads = 0;
+    for (let i = 0; i < total; i++) {
+      const from = i * state.perLine;
+      const to = from + state.perLine;
+      let n = 0;
+      for (const rd of reads) if (rd.start < to && rd.start + rd.chars.length > from) n++;
+      maxReads = Math.max(maxReads, n);
+    }
     const strands = 1 + (showComplement ? 1 : 0);
-    return Math.round((sites.length ? state.siteRows * 12 + 2 : 0) + strands * 17 + maxAA * 14 + maxBars * 15 + 10);
+    return Math.round((sites.length ? state.siteRows * 12 + 2 : 0) + strands * 17 + maxReads * 15 + maxAA * 14 + maxBars * 15 + 10);
   }
 
   function layout() {

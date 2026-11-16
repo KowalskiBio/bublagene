@@ -5,6 +5,7 @@ import { circularMap, linearMap } from './map.js';
 import { sequenceView } from './seqview.js';
 import { showMenu, closeMenu } from './menu.js';
 import { saveSession, loadSession, clearSession, timeAgo } from './session.js';
+import { readAlignments } from '../formats/bam.js';
 import { PANELS, renderPanel } from './panels.js';
 import { exampleDocument } from './sample.js';
 import { readDna, writeDna } from '../formats/dna.js';
@@ -28,10 +29,26 @@ const state = {
   ladder: '1 kb ladder',
   showTranslation: true,
   showComplement: true,
+  showReads: true,
   restorable: null, // a saved session found on startup, until the user answers
 };
 
 const undo = new Map(); // doc id -> {past: [], future: []}
+// Aligned reads are decoded from the file's own bytes rather than stored on the
+// document, so they are never written to the session or saved back.
+const alignments = new Map(); // doc id -> reads
+
+const readsFor = (doc) => (doc && state.showReads ? alignments.get(doc.id) ?? [] : []);
+
+async function loadAlignment(doc) {
+  if (alignments.has(doc.id)) return;
+  try {
+    const reads = await readAlignments(doc);
+    if (reads) { alignments.set(doc.id, reads); render(); }
+  } catch (e) {
+    toast(`Could not read the alignment in ${doc.name}: ${e.message}`, 'error');
+  }
+}
 
 // ---- remembering the session ------------------------------------------------
 
@@ -81,6 +98,7 @@ function restoreSession(saved) {
   state.showComplement = saved.showComplement ?? true;
   state.restorable = null;
   render();
+  for (const d of state.docs) loadAlignment(d);
   toast(`Reopened ${state.docs.length === 1 ? state.docs[0].name : `${state.docs.length} files`}`);
 }
 
@@ -105,6 +123,7 @@ function openDoc(doc) {
   state.shownEnzymes = new Set();
   autoShowEnzymes(doc);
   render();
+  loadAlignment(doc);
 }
 
 // Start by showing the unique cutters, which is what a map is usually for.
@@ -258,7 +277,9 @@ function renderViewBar(doc) {
   const opts = clear(el('viewOpts'));
   const ops = clear(el('editOps'));
   if (!doc) return;
-  for (const [key, label] of [['showComplement', 'Both strands'], ['showTranslation', 'Translation']]) {
+  const toggles = [['showComplement', 'Both strands'], ['showTranslation', 'Translation']];
+  if (alignments.get(doc.id)?.length) toggles.push(['showReads', `Reads (${alignments.get(doc.id).length})`]);
+  for (const [key, label] of toggles) {
     opts.append(h('label', { class: 'sub', style: { display: 'flex', gap: '4px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: state[key], onchange: (e) => { state[key] = e.target.checked; render(); } }), label));
   }
@@ -444,6 +465,7 @@ function renderView(doc) {
         if (!info?.live) render();
       },
       showTranslation: state.showTranslation, showComplement: state.showComplement,
+      reads: readsFor(doc),
     });
     view.append(sv);
     view.onscroll = () => sv.onScroll?.();
