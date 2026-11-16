@@ -4,6 +4,7 @@ import { h, clear, fmt, toast } from './dom.js';
 import { circularMap, linearMap } from './map.js';
 import { sequenceView } from './seqview.js';
 import { showMenu, closeMenu } from './menu.js';
+import { saveSession, loadSession, clearSession, timeAgo } from './session.js';
 import { PANELS, renderPanel } from './panels.js';
 import { exampleDocument } from './sample.js';
 import { readDna, writeDna } from '../formats/dna.js';
@@ -27,15 +28,74 @@ const state = {
   ladder: '1 kb ladder',
   showTranslation: true,
   showComplement: true,
+  restorable: null, // a saved session found on startup, until the user answers
 };
 
 const undo = new Map(); // doc id -> {past: [], future: []}
+
+// ---- remembering the session ------------------------------------------------
+
+const isDirty = (doc) => !!(undo.get(doc.id)?.past.length || doc.restoredDirty);
+
+let saveTimer = null;
+function rememberSoon() {
+  if (state.restorable) return; // nothing of the user's own is open yet
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(remember, 900);
+}
+
+function remember() {
+  clearTimeout(saveTimer);
+  if (!state.docs.length) { clearSession(); return; }
+  saveSession({
+    savedAt: new Date().toISOString(),
+    active: state.active,
+    view: state.view,
+    panel: state.panel,
+    selection: state.selection,
+    enzymeSet: state.enzymeSet,
+    shownEnzymes: [...state.shownEnzymes],
+    digestWith: state.digestWith,
+    agarose: state.agarose,
+    ladder: state.ladder,
+    showTranslation: state.showTranslation,
+    showComplement: state.showComplement,
+    // the undo history is deliberately left behind; only the documents return
+    docs: state.docs.map((d) => ({ ...cloneDoc(d), restoredDirty: isDirty(d) })),
+  });
+}
+
+function restoreSession(saved) {
+  state.docs = saved.docs ?? [];
+  for (const d of state.docs) undo.set(d.id, { past: [], future: [] });
+  state.active = Math.min(saved.active ?? 0, Math.max(0, state.docs.length - 1));
+  state.view = saved.view ?? 'map';
+  state.panel = saved.panel ?? 'Features';
+  state.selection = saved.selection ?? null;
+  state.enzymeSet = saved.enzymeSet ?? COMMON_SET;
+  state.shownEnzymes = new Set(saved.shownEnzymes ?? []);
+  state.digestWith = saved.digestWith ?? [];
+  state.agarose = saved.agarose ?? 1;
+  state.ladder = saved.ladder ?? '1 kb ladder';
+  state.showTranslation = saved.showTranslation ?? true;
+  state.showComplement = saved.showComplement ?? true;
+  state.restorable = null;
+  render();
+  toast(`Reopened ${state.docs.length === 1 ? state.docs[0].name : `${state.docs.length} files`}`);
+}
+
+function startFresh() {
+  state.restorable = null;
+  clearSession();
+  render();
+}
 const el = (id) => document.getElementById(id);
 const current = () => state.docs[state.active] ?? null;
 
 // ---- documents --------------------------------------------------------------
 
 function openDoc(doc) {
+  state.restorable = null; // opening something is an answer to the restore offer
   state.docs.push(doc);
   state.active = state.docs.length - 1;
   undo.set(doc.id, { past: [], future: [] });
@@ -59,7 +119,7 @@ function autoShowEnzymes(doc) {
 
 function closeDoc(i) {
   const doc = state.docs[i];
-  if (doc && undo.get(doc.id)?.past.length && !confirm(`Close ${doc.name}? Unsaved changes will be lost.`)) return;
+  if (doc && isDirty(doc) && !confirm(`Close ${doc.name}? Unsaved changes will be lost.`)) return;
   state.docs.splice(i, 1);
   undo.delete(doc?.id);
   state.active = Math.max(0, Math.min(state.active, state.docs.length - 1));
@@ -186,7 +246,7 @@ function shownSites(doc) {
 function renderTabs() {
   const box = clear(el('tabs'));
   state.docs.forEach((doc, i) => {
-    const dirty = (undo.get(doc.id)?.past.length ?? 0) > 0;
+    const dirty = isDirty(doc);
     box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.highlight = null; render(); } },
       h('span', { class: 'name' }, doc.name),
       dirty ? h('span', { class: 'dirty', title: 'edited' }, '•') : null,
@@ -407,6 +467,7 @@ function renderPanels(doc) {
 }
 
 function welcome() {
+  if (state.restorable) return restoreCard(state.restorable);
   const drop = h('div', { class: 'drop' },
     h('p', { style: { margin: '0 0 12px' } }, 'Drop a sequence file here'),
     h('button', { class: 'btn primary', onclick: () => el('fileInput').click() }, 'Choose a file…'));
@@ -428,6 +489,28 @@ function welcome() {
   return box;
 }
 
+function restoreCard(saved) {
+  const docs = saved.docs ?? [];
+  const list = h('ul', { style: { listStyle: 'none', padding: '0', margin: '0 0 20px' } });
+  for (const d of docs) {
+    list.append(h('li', {
+      style: { display: 'flex', gap: '10px', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid var(--line)' },
+    },
+      h('span', { style: { fontWeight: '500' } }, d.name),
+      h('span', { class: 'sub' }, `${fmt((d.seq ?? '').length)} bp · ${d.circular ? 'circular' : 'linear'}`),
+      d.restoredDirty ? h('span', { class: 'sub', style: { color: 'var(--accent)' } }, '· unsaved changes') : null));
+  }
+  return h('div', { class: 'welcome' },
+    h('h1', {}, 'Pick up where you left off?'),
+    h('p', {}, `${docs.length === 1 ? 'One file was' : `${docs.length} files were`} open ${timeAgo(saved.savedAt)}.`),
+    list,
+    h('div', { class: 'group' },
+      h('button', { class: 'btn primary', onclick: () => restoreSession(saved) }, docs.length === 1 ? 'Reopen it' : 'Reopen them'),
+      h('button', { class: 'btn', onclick: startFresh }, 'Start fresh')),
+    h('p', { class: 'sub', style: { marginTop: '18px' } },
+      'Kept in this browser only, never uploaded. “Start fresh” forgets it.'));
+}
+
 function render() {
   const doc = current();
   renderTabs();
@@ -440,6 +523,7 @@ function render() {
   el('redoBtn').disabled = !(undo.get(doc?.id)?.future.length);
   el('saveAs').disabled = !doc;
   document.title = doc ? `${doc.name} · BublaGene` : 'BublaGene';
+  rememberSoon();
 }
 
 // ---- events -------------------------------------------------------------------
@@ -496,9 +580,21 @@ document.addEventListener('copy', (e) => {
 
 window.addEventListener('resize', () => { if (state.view === 'seq') renderView(current()); });
 
+// write the session out before the tab goes away, rather than waiting out the debounce
+addEventListener('pagehide', remember);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') remember(); });
+
 try {
   const t = localStorage.getItem('bublagene.theme');
   if (t) document.documentElement.dataset.theme = t;
 } catch { /* ignore */ }
 
 render();
+
+// offer the previous session once storage answers
+loadSession().then((saved) => {
+  if (saved?.docs?.length && !state.docs.length) {
+    state.restorable = saved;
+    render();
+  }
+});

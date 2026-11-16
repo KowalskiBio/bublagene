@@ -27,6 +27,11 @@ from the built-in example.
 - **Panels** — features (add, edit, delete, ORFs), primers (binding sites, pair
   design, PCR), enzymes, digest with a simulated gel, and file details.
 - Undo/redo, several files open at once, light and dark themes.
+- **Your files come back.** What you had open is kept in the browser's own
+  storage, so closing the tab and returning offers to reopen it, listing the
+  files and whether any had unsaved changes. "Start fresh" forgets it. Nothing
+  is uploaded, and the stored copy keeps a `.dna` file's untouched bytes, so a
+  reopened file still saves back correctly.
 
 There is also a command line, described below.
 
