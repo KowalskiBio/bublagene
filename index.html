@@ -223,6 +223,19 @@ table.data tr:hover td { background: var(--sunk); }
 .mapwrap svg { max-width: 100%; max-height: 100%; height: auto; }
 svg text { font-family: var(--font-sans); }
 
+/* ---- chromatogram ---- */
+.tracewrap { display: flex; flex-direction: column; height: 100%; min-height: 320px; }
+.tracebar {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex: none;
+  padding: 8px max(16px, env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--line);
+}
+.tracescroll { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; position: relative; min-height: 220px; }
+.tracespacer { height: 1px; }
+.tracecanvas { position: absolute; top: 0; }
+.tracelegend { display: flex; gap: 12px; padding: 6px 16px; font-size: 11.5px; color: var(--muted); flex: none; }
+.tracelegend b { font-weight: 600; }
+
 /* ---- gel ---- */
 .gel { background: #11161a; border-radius: 8px; padding: 12px 8px; display: flex; gap: 10px; align-items: stretch; }
 .lane { flex: 1 1 0; position: relative; min-height: 300px; }
@@ -306,6 +319,7 @@ svg text { font-family: var(--font-sans); }
       <div class="seg" id="viewSeg">
         <button data-view="map" aria-pressed="true">Map</button>
         <button data-view="seq" aria-pressed="false">Sequence</button>
+        <button data-view="trace" aria-pressed="false" hidden>Chromatogram</button>
       </div>
       <div class="group" id="viewOpts"></div>
       <div class="spacer"></div>

@@ -297,10 +297,8 @@ const CARRIED = {
   0x0d: ['display settings', 'sets of display settings'],
   0x0e: ['custom enzyme sets', 'custom enzyme sets'],
   0x0f: ['unsynced case changes', 'unsynced case changes'],
-  0x10: ['an aligned sequence', 'aligned sequences'],
-  // 0x11 and 0x18 only index the alignments listed above, so saying so twice
-  // tells the reader nothing
-  0x12: ['a sequencing trace', 'sequencing traces'],
+  // 0x10-0x1b are the sequencing data, drawn in the chromatogram and sequence
+  // views rather than listed here as unviewable
   0x13: ['marked uracil positions', 'sets of marked uracil positions'],
   0x14: ['custom strand colours', 'sets of custom strand colours'],
   0x16: ['custom numbering', 'sets of custom numbering'],
@@ -335,10 +333,6 @@ function fileContents(el, doc) {
       list.append(h('li', {}, n > 1 ? `${fmt(n)} ${many}` : one));
     }
     el.append(list);
-    if ([...counts.keys()].some((t) => t === 0x10 || t === 0x12)) {
-      el.append(h('p', { class: 'sub', style: { marginTop: '8px' } },
-        'The aligned reads are shown in the sequence view; open the file in SnapGene for the trace chromatograms.'));
-    }
   }
 
   // the format-level view, for anyone who wants it

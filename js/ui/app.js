@@ -6,6 +6,8 @@ import { sequenceView } from './seqview.js';
 import { showMenu, closeMenu } from './menu.js';
 import { saveSession, loadSession, clearSession, timeAgo } from './session.js';
 import { readAlignments } from '../formats/bam.js';
+import { readTraces } from '../formats/ztr.js';
+import { traceView } from './traceview.js';
 import { PANELS, renderPanel } from './panels.js';
 import { exampleDocument } from './sample.js';
 import { readDna, writeDna } from '../formats/dna.js';
@@ -30,6 +32,8 @@ const state = {
   showTranslation: true,
   showComplement: true,
   showReads: true,
+  trace: 0,
+  pxPerBase: 14,
   restorable: null, // a saved session found on startup, until the user answers
 };
 
@@ -37,16 +41,24 @@ const undo = new Map(); // doc id -> {past: [], future: []}
 // Aligned reads are decoded from the file's own bytes rather than stored on the
 // document, so they are never written to the session or saved back.
 const alignments = new Map(); // doc id -> reads
+const traces = new Map();     // doc id -> chromatograms
 
 const readsFor = (doc) => (doc && state.showReads ? alignments.get(doc.id) ?? [] : []);
 
 async function loadAlignment(doc) {
   if (alignments.has(doc.id)) return;
+  alignments.set(doc.id, null);
   try {
     const reads = await readAlignments(doc);
     if (reads) { alignments.set(doc.id, reads); render(); }
   } catch (e) {
     toast(`Could not read the alignment in ${doc.name}: ${e.message}`, 'error');
+  }
+  try {
+    const found = await readTraces(doc);
+    if (found.length) { traces.set(doc.id, found); render(); }
+  } catch (e) {
+    toast(`Could not read the traces in ${doc.name}: ${e.message}`, 'error');
   }
 }
 
@@ -449,6 +461,22 @@ function renderView(doc) {
     onPick: (f) => f && api.focusFeature(f),
     onPickSite: (st) => api.setSelection({ start: st.site.start, end: st.site.end }),
   };
+  if (state.view === 'trace') {
+    const found = traces.get(doc.id) ?? [];
+    const tv = traceView(found, {
+      selected: Math.min(state.trace, found.length - 1),
+      pxPerBase: state.pxPerBase,
+      onSelect: (i) => { state.trace = i; render(); },
+      onZoom: (px) => { state.pxPerBase = px; render(); },
+      onPickBase: (k, trace) => {
+        const base = trace.bases[k];
+        toast(`Base ${k + 1} of ${trace.name || 'the trace'}: ${base}${trace.confidence ? ` (quality ${trace.confidence[k] ?? '?'})` : ''}`);
+      },
+    });
+    view.append(tv);
+    addEventListener('resize', () => tv.refresh?.(), { once: true });
+    return;
+  }
   if (state.view === 'map') {
     const wrap = h('div', { class: 'mapwrap' });
     wrap.append(doc.circular ? circularMap(doc, opts) : linearMap(doc, opts));
@@ -536,7 +564,12 @@ function restoreCard(saved) {
 function render() {
   const doc = current();
   renderTabs();
-  for (const b of el('viewSeg').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
+  const hasTraces = !!traces.get(doc?.id)?.length;
+  for (const b of el('viewSeg').querySelectorAll('button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
+    if (b.dataset.view === 'trace') b.hidden = !hasTraces;
+  }
+  if (state.view === 'trace' && !hasTraces) state.view = 'map';
   renderViewBar(doc);
   renderView(doc);
   renderStatus(doc);
