@@ -1,0 +1,224 @@
+// Sequence utilities: complements, translation, IUPAC matching, GC, melting temperature.
+// Coordinates everywhere in BublaGene: 0-based, end-exclusive; on circular
+// sequences a range may wrap (end <= start means it crosses the origin).
+
+const COMP = {
+  A: 'T', T: 'A', G: 'C', C: 'G', U: 'A', N: 'N',
+  R: 'Y', Y: 'R', S: 'S', W: 'W', K: 'M', M: 'K',
+  B: 'V', V: 'B', D: 'H', H: 'D',
+};
+
+export function complement(s) {
+  let out = '';
+  for (const ch of s) {
+    const up = ch.toUpperCase();
+    const c = COMP[up] ?? up;
+    out += ch === up ? c : c.toLowerCase();
+  }
+  return out;
+}
+
+export function revcomp(s) {
+  return complement(s).split('').reverse().join('');
+}
+
+export function cleanSequence(s) {
+  return s.replace(/[^A-Za-z]/g, '').toUpperCase();
+}
+
+// ---- ranges -------------------------------------------------------------
+
+export function mod(a, n) {
+  return ((a % n) + n) % n;
+}
+
+export function rangeLength(r, L) {
+  if (r.end > r.start) return r.end - r.start;
+  if (r.end === r.start) return r.full ? L : 0;
+  return L - r.start + r.end;
+}
+
+export function subseq(seq, start, end, circular) {
+  const L = seq.length;
+  if (!circular || end > start) return seq.slice(start, end);
+  return seq.slice(start) + seq.slice(0, end);
+}
+
+// Does position p (0-based) fall inside range r on a sequence of length L?
+export function inRange(p, r, L) {
+  if (r.end > r.start) return p >= r.start && p < r.end;
+  if (r.end === r.start) return !!r.full;
+  return p >= r.start || p < r.end;
+}
+
+// Is range a completely inside range b (both possibly wrapping)?
+export function rangeInside(a, b, L) {
+  const lb = rangeLength(b, L);
+  const offA = mod(a.start - b.start, L);
+  return offA + rangeLength(a, L) <= lb;
+}
+
+// ---- composition ----------------------------------------------------------
+
+export function gcContent(s) {
+  if (!s.length) return 0;
+  let gc = 0;
+  for (const ch of s.toUpperCase()) if (ch === 'G' || ch === 'C' || ch === 'S') gc++;
+  return (100 * gc) / s.length;
+}
+
+// ---- translation (standard genetic code) -------------------------------
+
+const BASES = 'TCAG';
+const AA = 'FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG';
+const CODON = {};
+for (let i = 0; i < 64; i++) {
+  CODON[BASES[i >> 4] + BASES[(i >> 2) & 3] + BASES[i & 3]] = AA[i];
+}
+
+export const THREE_LETTER = {
+  A: 'Ala', R: 'Arg', N: 'Asn', D: 'Asp', C: 'Cys', Q: 'Gln', E: 'Glu', G: 'Gly',
+  H: 'His', I: 'Ile', L: 'Leu', K: 'Lys', M: 'Met', F: 'Phe', P: 'Pro', S: 'Ser',
+  T: 'Thr', W: 'Trp', Y: 'Tyr', V: 'Val', '*': 'Stop', X: 'Xaa',
+};
+
+export function translate(dna) {
+  const s = dna.toUpperCase().replace(/U/g, 'T');
+  let p = '';
+  for (let i = 0; i + 3 <= s.length; i += 3) p += CODON[s.slice(i, i + 3)] ?? 'X';
+  return p;
+}
+
+const AA_MASS = {
+  A: 71.0788, R: 156.1875, N: 114.1038, D: 115.0886, C: 103.1388, E: 129.1155,
+  Q: 128.1307, G: 57.0519, H: 137.1411, I: 113.1594, L: 113.1594, K: 128.1741,
+  M: 131.1926, F: 147.1766, P: 97.1167, S: 87.0782, T: 101.1051, W: 186.2132,
+  Y: 163.1760, V: 99.1326,
+};
+
+export function proteinMass(p) {
+  let m = 18.01524;
+  for (const a of p) if (AA_MASS[a]) m += AA_MASS[a];
+  return m;
+}
+
+// ---- IUPAC ------------------------------------------------------------------
+
+export const IUPAC = {
+  A: 'A', C: 'C', G: 'G', T: 'T', U: 'T', R: 'AG', Y: 'CT', S: 'CG', W: 'AT',
+  K: 'GT', M: 'AC', B: 'CGT', D: 'AGT', H: 'ACT', V: 'ACG', N: 'ACGT',
+};
+
+export function iupacRegexSource(pattern) {
+  let src = '';
+  for (const ch of pattern.toUpperCase()) {
+    const set = IUPAC[ch];
+    if (!set) throw new Error(`Not a nucleotide code: ${ch}`);
+    src += set.length === 1 ? set : `[${set}]`;
+  }
+  return src;
+}
+
+// All occurrences (overlapping) of an IUPAC pattern on both strands.
+// Returns [{start, end, strand}] with start/end on the top strand.
+export function findPattern(seq, pattern, circular) {
+  const n = pattern.length;
+  const L = seq.length;
+  if (!n || n > L) return [];
+  const hay = circular ? seq + seq.slice(0, n - 1) : seq;
+  const hits = [];
+  const scan = (pat, strand) => {
+    const re = new RegExp(`(?=(${iupacRegexSource(pat)}))`, 'g');
+    let m;
+    while ((m = re.exec(hay))) {
+      if (m.index >= L) break;
+      hits.push({ start: m.index, end: (m.index + n) % (circular ? L : Infinity), strand });
+      re.lastIndex = m.index + 1;
+    }
+  };
+  scan(pattern, 1);
+  const rc = revcomp(pattern);
+  if (rc !== pattern.toUpperCase()) scan(rc, -1);
+  for (const h of hits) if (!circular) h.end = h.start + n;
+  return hits.sort((a, b) => a.start - b.start);
+}
+
+// ---- melting temperature ------------------------------------------------------
+// Nearest-neighbour model, SantaLucia (1998) unified parameters,
+// 50 mM Na+, 250 nM oligo by default.
+
+const NN = {
+  AA: [-7.9, -22.2], TT: [-7.9, -22.2],
+  AT: [-7.2, -20.4],
+  TA: [-7.2, -21.3],
+  CA: [-8.5, -22.7], TG: [-8.5, -22.7],
+  GT: [-8.4, -22.4], AC: [-8.4, -22.4],
+  CT: [-7.8, -21.0], AG: [-7.8, -21.0],
+  GA: [-8.2, -22.2], TC: [-8.2, -22.2],
+  CG: [-10.6, -27.2],
+  GC: [-9.8, -24.4],
+  GG: [-8.0, -19.9], CC: [-8.0, -19.9],
+};
+
+export function meltingTemp(s, { na = 0.05, oligo = 250e-9 } = {}) {
+  const q = s.toUpperCase().replace(/[^ACGT]/g, '');
+  if (q.length < 2) return 0;
+  let dH = 0;
+  let dS = 0;
+  for (let i = 0; i < q.length - 1; i++) {
+    const p = NN[q.slice(i, i + 2)];
+    dH += p[0];
+    dS += p[1];
+  }
+  for (const end of [q[0], q[q.length - 1]]) {
+    if (end === 'G' || end === 'C') { dH += 0.1; dS += -2.8; } else { dH += 2.3; dS += 4.1; }
+  }
+  dS += 0.368 * (q.length - 1) * Math.log(na);
+  const R = 1.987;
+  const selfComp = q === revcomp(q);
+  const ct = selfComp ? oligo : oligo / 4;
+  return (dH * 1000) / (dS + R * Math.log(ct)) - 273.15;
+}
+
+// ---- ORFs ---------------------------------------------------------------------
+
+// Open reading frames (ATG ... stop) of at least minCodons codons, both strands.
+// For each stop codon only the longest ORF (first ATG) is reported.
+export function findOrfs(seq, circular, minCodons = 100) {
+  const L = seq.length;
+  const out = [];
+  const STOPS = new Set(['TAA', 'TAG', 'TGA']);
+  const scan = (s, strand) => {
+    const hay = circular ? s + s + s.slice(0, 2) : s;
+    const limit = circular ? 2 * L : L;
+    const seenStops = new Set();
+    for (let frame = 0; frame < 3; frame++) {
+      let atg = -1;
+      for (let i = frame; i + 3 <= hay.length && i < limit; i += 3) {
+        const c = hay.slice(i, i + 3);
+        if (atg < 0 && c === 'ATG') atg = i;
+        if (STOPS.has(c)) {
+          if (atg >= 0 && atg < L) {
+            const len = i + 3 - atg;
+            const stopKey = (i + 3) % L;
+            if (len / 3 - 1 >= minCodons && len <= L && !seenStops.has(stopKey)) {
+              seenStops.add(stopKey);
+              out.push({ s: atg, len, strand });
+            }
+          }
+          atg = -1;
+        }
+      }
+    }
+  };
+  const up = seq.toUpperCase();
+  scan(up, 1);
+  scan(revcomp(up), -1);
+  return out.map(({ s, len, strand }) => {
+    let start = strand === 1 ? s : L - s - len;
+    start = mod(start, L);
+    let end = start + len;
+    if (circular) end = mod(end, L);
+    return { start, end, strand, codons: len / 3 - 1 };
+  }).sort((a, b) => b.codons - a.codons);
+}

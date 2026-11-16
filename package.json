@@ -1,0 +1,16 @@
+{
+  "name": "bublagene",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A browser-based DNA sequence viewer and editor for SnapGene .dna, GenBank and FASTA files",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://kowalskibio.github.io/bublagene/",
+  "repository": { "type": "git", "url": "https://github.com/KowalskiBio/bublagene.git" },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "serve": "python3 -m http.server 8642",
+    "bg": "node tools/bg.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

@@ -1,0 +1,134 @@
+# BublaGene
+
+**[Try it here](https://kowalskibio.github.io/bublagene/)** — it runs entirely in your browser.
+
+A browser-based sequence viewer and editor for SnapGene `.dna`, GenBank and
+FASTA files. Everything runs locally; no file leaves the machine.
+
+## Run it
+
+```bash
+python3 -m http.server 8642 --directory bublagene
+```
+
+Then open <http://localhost:8642>. Drop a sequence file on the page, or start
+from the built-in example.
+
+- **Map** — circular or linear, features as arrows stacked into lanes, enzyme
+  sites labelled with their cut positions, click anything to select it.
+- **Sequence** — both strands, feature bars, amino acids under their codons,
+  cut marks. Drag across the bases to select a region and press ⌘C to copy it;
+  only the lines in view are built, so a 35 kb plasmid stays responsive.
+- **Right-click** anywhere in the map or sequence for everything you can do
+  with a region: copy it as bases, reverse complement, protein or FASTA; turn
+  it into a forward or reverse primer; design a pair; add a feature; delete or
+  replace the bases; or make it the start of a circular sequence. Right-clicking
+  a feature adds its own actions on top.
+- **Panels** — features (add, edit, delete, ORFs), primers (binding sites, pair
+  design, PCR), enzymes, digest with a simulated gel, and file details.
+- Undo/redo, several files open at once, light and dark themes.
+
+There is also a command line, described below.
+
+## Requirements
+
+Node 20 or newer. On this machine the default `node` (25.9) is broken — it fails
+with a missing `libsimdjson` library after a Homebrew upgrade — so use the
+Node 24 installed alongside it:
+
+```bash
+export PATH=/opt/homebrew/opt/node@24/bin:$PATH
+```
+
+`brew reinstall node` should repair the default one.
+
+## Run the tests
+
+```bash
+cd bublagene && npm test
+```
+
+21 tests. Most run on their own; the `.dna` tests additionally read every
+sample file shipped inside SnapGene, so they need its disk image mounted at
+`/Volumes/SnapGene`, or another folder given as `SNAPGENE_SAMPLES`:
+
+```bash
+SNAPGENE_SAMPLES=~/my-plasmids npm test
+```
+
+Without samples those tests report themselves as skipped and the rest still run.
+
+What they check: reverse complement, translation, melting temperature, IUPAC
+searching across the origin, enzyme sites (including enzymes that cut outside
+their recognition site), digests, edits that keep features on the same bases,
+origin rotation, reverse complementing, ORF finding, primer binding, PCR,
+XML, GenBank and FASTA round trips, and `.dna` round trips over all 206 sample
+files. One test translates all 877 coding sequences in those files and compares
+each against the protein stored in the file itself; 874 agree exactly and the
+three that don't are listed in the test with the reason.
+
+## Use it
+
+```bash
+node tools/bg.mjs info "/Volumes/SnapGene/SnapGene.app/Contents/Resources/sampleData/Sample project/pIB2-SEC13-mEGFP.dna"
+```
+
+| Command | What it does |
+|---|---|
+| `bg info <file>` | summary, features with protein lengths, primers with binding sites, and the raw segment list for `.dna` files |
+| `bg seq <file> [start..end]` | the sequence, numbered, optionally for one region |
+| `bg cut <file> [enzymes] [digest-with]` | which enzymes cut where, unique cutters first; add a second list to see fragment sizes and ends |
+| `bg orfs <file> [minCodons]` | open reading frames on both strands |
+| `bg primers <file> <start..end> [Tm]` | design a primer pair for a region |
+| `bg pcr <file> <fwd> <rev>` | simulate PCR and describe the product |
+| `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
+
+Positions are 1-based and inclusive, as in SnapGene. Files may be `.dna`,
+`.gb`/`.gbk`/`.genbank`, or `.fasta`/`.fa`.
+
+Examples:
+
+```bash
+node tools/bg.mjs cut plasmid.dna EcoRI,BamHI,HindIII,NotI
+```
+
+```bash
+node tools/bg.mjs primers plasmid.dna 1653..2372
+```
+
+## Working with .dna files
+
+Reading keeps every segment of the original file. Saving regenerates only the
+parts BublaGene understands (sequence, features, primers, notes, sequence
+properties) and passes everything else through byte for byte, so the cloning
+history, display options and alignments in a file survive a round trip. Caches
+that SnapGene rebuilds are dropped once the sequence has been edited, so they
+can never go stale. A segment that is xz-compressed is passed through untouched
+rather than guessed at, and `info` reports it.
+
+The format itself is documented in `../snapgene_dna_format.md`.
+
+## Layout
+
+```
+js/seq.js              sequence maths: complement, translation, Tm, ORFs, IUPAC
+js/model.js            the document model and edits that keep features in place
+js/xml.js              a small XML parser and writer
+js/enzymes.js          ~90 restriction enzymes, site finding, digests, gel model
+js/primers.js          primer binding, design, PCR
+js/formats/dna.js      SnapGene .dna
+js/formats/genbank.js  GenBank and FASTA
+js/ui/dom.js           DOM helpers (for the interface that isn't built yet)
+tools/bg.mjs           the command line
+```
+
+## Not built
+
+- Cloning simulation (ligation, assembly).
+- The digest/gel and primer panels work but have had less testing than the map and sequence views.
+
+## Licence
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE). You may use, study, change and share
+this; anything you distribute or run as a network service that is built on it
+must be offered under the same licence, with its source available.
