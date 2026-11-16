@@ -37,6 +37,13 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Primers that behave like primers.** Tm uses the SantaLucia unified
+  nearest-neighbour parameters with salt/Mg correction, degeneracy is expanded,
+  and hairpin/self-dimer/pair-dimer ΔG is reported. Design ranks candidate
+  pairs by Tm match and specificity; PCR tolerates a configurable number of
+  mismatches while always requiring a matching 3′ end, works on circular
+  templates, and adds `primer_bind` features to the product. The gel panel and
+  `bg gel` show fragment sizes against a chosen ladder.
 - **Annotations keep their meaning.** Genetic codes 1–33 are stored per
   feature (`/transl_table`) and honoured when translating; `codon_start` and
   phases shift the reading frame; `<`/`>` fuzzy ends, `join`, `order`, nested
@@ -108,6 +115,8 @@ node tools/bg.mjs info plasmid.dna
 | `bg codons` | list and validate the genetic codes |
 | `bg annotate <file> [out]` | recompute `translation` / `gc_content` after edits |
 | `bg composition <file>` | base counts, GC and length |
+| `bg design <file> <start..end> [flags]` | design primers with Tm, product-size, tail and restriction-site options |
+| `bg gel <bp,bp,...> [flags]` | fragment sizes on a simulated gel |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,

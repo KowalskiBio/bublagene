@@ -7,6 +7,8 @@
 //   bg orfs      <file> [minCodons]      open reading frames
 //   bg primers   <file> <start..end>     design a primer pair for a region
 //   bg pcr       <file> <fwd> <rev>      simulate PCR, print the product
+//   bg design    <file> <start..end>     design with Tm/product/tail/restriction options
+//   bg gel       <bp,bp,...>             fragment sizes on a simulated gel
 //   bg clone     <vector> <insert> <enzyme,...> [out]   restriction cloning
 //   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
 //   bg history   <file>                  read the cloning record beside a file
@@ -23,7 +25,7 @@ import { basename, extname } from 'node:path';
 import { readDna, writeDna, describeSegments } from '../js/formats/dna.js';
 import { readGenBank, writeGenBank, readFasta, writeFasta } from '../js/formats/genbank.js';
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel } from '../js/enzymes.js';
-import { findBindingSites, designPrimers, simulatePCR } from '../js/primers.js';
+import { findBindingSites, designPrimers, designPrimerPairs, simulatePCR, pcrDiagnostics, gelView } from '../js/primers.js';
 import { restrictionClone, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName } from '../js/cloning.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
@@ -47,6 +49,23 @@ function parseRegion(spec, L) {
   const m = /^(\d+)\.\.(\d+)$/.exec(spec ?? '');
   if (!m) throw new Error('Give a region as start..end, 1-based and inclusive, e.g. 100..600');
   return { start: Number(m[1]) - 1, end: Number(m[2]) };
+}
+
+// Split "--flag value" pairs from positional arguments.
+function splitFlags(args, known) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('--')) {
+      const key = a.slice(2);
+      if (known.includes(key)) { flags[key] = args[++i]; continue; }
+      flags[key] = true;
+      continue;
+    }
+    positional.push(a);
+  }
+  return { positional, flags };
 }
 
 const pad = (s, n) => String(s).padEnd(n);
@@ -188,6 +207,15 @@ try {
     for (const v of checks) console.log(`  ${String(v.id).padStart(2)}  ${pad(v.name, 48)} ${v.ok ? 'ok' : `INVALID: ${v.issues.join(', ')}`}`);
     process.exit(0);
   }
+  if (cmd === 'gel') {
+    const { positional, flags } = splitFlags(rest, ['ladder', 'agarose']);
+    const sizes = (file ?? positional[0] ?? '').split(',').map((n) => Number(n.trim())).filter((n) => n > 0);
+    if (!sizes.length) throw new Error('Give fragment sizes in bp, comma-separated, e.g. bg gel 1000,500,200');
+    const gel = gelView(sizes, { ladder: flags.ladder ?? '1 kb ladder', agarose: Number(flags.agarose ?? 1) });
+    for (const b of gel.bands) console.log(`  ${pad(num(b.bp) + ' bp', 14)} ${(b.migration * 100).toFixed(0).padStart(3)}% down the gel`);
+    console.log(`\n${gel.bands.length} band(s); ladder ${gel.ladder}`);
+    process.exit(0);
+  }
   if (!file) throw new Error('Give a file to work on');
   const doc = load(file);
   const L = doc.seq.length;
@@ -238,18 +266,68 @@ try {
     const orfs = findOrfs(doc.seq, doc.circular, min);
     console.log(`${orfs.length} ORF(s) of at least ${min} codons`);
     for (const o of orfs) console.log(`  ${pad(o.codons + ' codons', 14)} ${o.strand === 1 ? '+' : '-'} ${num(o.start + 1)}..${num(o.end)}`);
-  } else if (cmd === 'primers') {
-    const r = parseRegion(rest[0], L);
-    const d = designPrimers(doc.seq, doc.circular, r.start, r.end, { targetTm: Number(rest[1] ?? 60) });
-    for (const p of [d.forward, d.reverse]) {
-      console.log(`${p.dir === 1 ? 'forward' : 'reverse'}  ${p.seq}`);
-      console.log(`         ${p.seq.length} nt, Tm ${p.tm.toFixed(1)}°C, GC ${p.gc.toFixed(0)}%`);
+  } else if (cmd === 'primers' || cmd === 'design') {
+    const { positional, flags } = splitFlags(rest, ['tm', 'min-product', 'max-product', 'fwd-tail', 'rev-tail', 'fwd-enzyme', 'rev-enzyme', 'flex', 'min-len', 'max-len', 'json']);
+    const r = parseRegion(positional[0], L);
+    const targetTm = Number(flags.tm ?? positional[1] ?? 60);
+    const options = {
+      targetTm,
+      minTm: targetTm - 5,
+      maxTm: targetTm + 8,
+      minProduct: flags['min-product'] ? Number(flags['min-product']) : 0,
+      maxProduct: flags['max-product'] ? Number(flags['max-product']) : Infinity,
+      fwdTail: flags['fwd-tail'] ?? '',
+      revTail: flags['rev-tail'] ?? '',
+      fwdRestriction: flags['fwd-enzyme'] ?? null,
+      revRestriction: flags['rev-enzyme'] ?? null,
+      flex: Number(flags.flex ?? 0),
+      minLen: Number(flags['min-len'] ?? 18),
+      maxLen: Number(flags['max-len'] ?? 32),
+    };
+    const d = designPrimerPairs(doc.seq, doc.circular, r.start, r.end, options);
+    if (flags.json) {
+      console.log(JSON.stringify({
+        forward: { sequence: d.forward.seq, annealing: d.forward.annealing, tm: d.forward.tm, gc: d.forward.gc },
+        reverse: { sequence: d.reverse.seq, annealing: d.reverse.annealing, tm: d.reverse.tm, gc: d.reverse.gc },
+        productLength: d.productLength, tmDifference: d.tmDiff, warnings: d.warnings,
+      }, null, 2));
+    } else {
+      for (const p of [d.forward, d.reverse]) {
+        console.log(`${p.dir === 1 ? 'forward' : 'reverse'}  ${p.seq}`);
+        const props = p.properties;
+        console.log(`         ${p.seq.length} nt, Tm ${p.tm.toFixed(1)}°C, GC ${p.gc.toFixed(0)}%, 3′ ${props.clamp.threePrimeGc ? 'G/C clamp' : 'no clamp'}`);
+        if (props.hairpin.dg < -3) console.log(`         hairpin ΔG37 ${props.hairpin.dg.toFixed(1)} kcal/mol (${props.hairpin.stem} bp stem)`);
+        if (props.selfDimer.dg < -5) console.log(`         self-dimer ΔG37 ${props.selfDimer.dg.toFixed(1)} kcal/mol`);
+      }
+      console.log(`product  ${num(d.productLength)} bp  (Tm difference ${d.tmDiff.toFixed(1)} °C)`);
+      for (const w of d.warnings) console.log(`note: ${w}`);
     }
-    console.log(`product  ${num(d.productLength)} bp`);
   } else if (cmd === 'pcr') {
-    const { doc: product, warnings } = simulatePCR(doc, rest[0], rest[1]);
-    for (const w of warnings) console.log(`note: ${w}`);
-    info(product);
+    const { positional, flags } = splitFlags(rest, ['mismatch', 'anneal', 'three-prime', 'json']);
+    const [fwdSeq, revSeq] = positional;
+    if (!fwdSeq || !revSeq) throw new Error('Usage: bg pcr <file> <forward> <reverse> [--mismatch N] [--anneal N] [--json]');
+    const opts = {
+      minAnneal: Number(flags.anneal ?? 15),
+      maxMismatches: Number(flags.mismatch ?? 0),
+      threePrimeExact: Number(flags['three-prime'] ?? 1),
+    };
+    try {
+      const result = simulatePCR(doc, fwdSeq, revSeq, opts);
+      if (flags.json) {
+        console.log(JSON.stringify({
+          product: { length: result.doc.seq.length, sequence: result.doc.seq },
+          junctions: result.junctions, warnings: result.warnings,
+        }, null, 2));
+      } else {
+        for (const w of result.warnings) console.log(`note: ${w}`);
+        info(result.doc);
+        const gel = gelView([{ len: result.doc.seq.length }]);
+        console.log(`\ngel: ${gel.list.join(', ')} bp`);
+      }
+    } catch (e) {
+      if (e.diagnostics) for (const r of e.diagnostics.reasons) console.log(`reason: ${r}`);
+      throw e;
+    }
   } else if (cmd === 'clone') {
     const insertPath = rest[0];
     const enzymeSpec = rest[1];

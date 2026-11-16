@@ -132,8 +132,9 @@ test('primer binding sites, design and PCR', () => {
   assert.equal(sites[0].tail, 'GGATCC');
   const { doc } = simulatePCR(template, fwd, rev);
   assert.equal(doc.seq, 'GGATCC' + left + middle + right);
-  assert.equal(doc.features.length, 1);
-  assert.equal(featureSequence(doc, doc.features[0]), 'GAATTC');
+  assert.equal(doc.features.length, 3);
+  assert.equal(doc.features.filter((f) => f.type === 'primer_bind').length, 2);
+  assert.equal(featureSequence(doc, doc.features.find((f) => f.type === 'misc_feature')), 'GAATTC');
   const design = designPrimers(template.seq, false, 40, 40 + left.length + middle.length + right.length, { targetTm: 58 });
   assert.ok(template.seq.includes(design.forward.seq));
   assert.ok(template.seq.includes(revcomp(design.reverse.seq)));

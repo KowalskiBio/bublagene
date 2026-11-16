@@ -213,11 +213,12 @@ export function meltingTemp(s, { na = 0.05, oligo = 250e-9 } = {}) {
     dS += p[1];
   }
   for (const end of [q[0], q[q.length - 1]]) {
-    if (end === 'G' || end === 'C') { dH += 0.1; dS += -2.8; } else { dH += 2.3; dS += 4.1; }
+    if (end === 'A' || end === 'T') { dH += 2.2; dS += 6.9; }
   }
   dS += 0.368 * (q.length - 1) * Math.log(na);
   const R = 1.987;
   const selfComp = q === revcomp(q);
+  if (selfComp) dS += -1.4;
   const ct = selfComp ? oligo : oligo / 4;
   return (dH * 1000) / (dS + R * Math.log(ct)) - 273.15;
 }
