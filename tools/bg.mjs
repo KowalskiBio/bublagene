@@ -34,6 +34,8 @@
 //   bg frames    <file> [start..end]     six-frame translation
 //   bg export    <file> <out.gff3|.bed|.csv|.txt|.svg|.png|.pdf>
 //   bg project   save <out.json> <files...> | open <project.json> <outdir>
+//   bg report    <file> [--orfs N] [--enzymes list] [--sequence] [--out f.json]
+//   bg pipeline  <file> <steps.json>    reproducible JSON report for a pipeline
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -150,6 +152,48 @@ function info(doc) {
     console.log('\nContainer segments in the file');
     for (const s of segs) console.log(`  0x${s.type.toString(16).padStart(2, '0')}  ${pad(s.name, 32)} ${num(s.bytes)} bytes`);
   }
+}
+
+function infoReport(doc) {
+  const L = doc.seq.length;
+  return {
+    schema: 'bublagene/report/1',
+    name: doc.name,
+    length: L,
+    circular: !!doc.circular,
+    gc: Math.round(gcContent(doc.seq) * 100) / 100,
+    description: doc.notes?.description ?? '',
+    features: (doc.features ?? []).map((f) => {
+      const span = featureSpan(f);
+      const out = {
+        id: f.id, name: f.name, type: f.type, strand: f.strand,
+        start: span.start, end: span.end, length: featureLength(f, L),
+        segments: f.segments.map((x) => ({ start: x.start, end: x.end })),
+      };
+      if (f.type === 'CDS') {
+        out.translation = translateFeature(doc, f);
+        out.transl_table = featureTableId(f, doc);
+        out.protein_mass = Math.round(featureProteinMass(doc, f));
+      }
+      return out;
+    }),
+    primers: (doc.primers ?? []).map((p) => ({
+      name: p.name, sequence: p.seq,
+      bindingSites: findBindingSites(doc.seq, doc.circular, p.seq).map((x) => ({ strand: x.strand, start: x.start, end: x.end, mismatches: x.mismatches })),
+    })),
+    segments: describeSegments(doc),
+  };
+}
+
+function cutReport(doc, names, flags = {}) {
+  let list = (names ? names.split(',') : COMMON_SET).map((n) => n.trim()).filter(Boolean);
+  if (flags.n != null) list = cuttersByCount(doc.seq, doc.circular, list, Number(flags.n)).map((r) => r.enzyme.name);
+  if (flags.unique) list = uniqueCutters(doc.seq, doc.circular, list).map((r) => r.enzyme.name);
+  return list.map((n) => {
+    const e = ENZYME_BY_NAME[n];
+    const sites = findSites(doc.seq, doc.circular, e);
+    return { name: n, site: e.site, type: e.type, overhang: e.overhang, overhangLength: e.overhangLength, cutTop: e.top, cutBottom: e.bottom, sites: sites.map((x) => ({ pos: x.top, strand: x.strand, start: x.site.start, end: x.site.end })) };
+  });
 }
 
 function cut(doc, names, flags = {}) {
@@ -395,7 +439,11 @@ try {
   const doc = load(file);
   const L = doc.seq.length;
 
-  if (cmd === 'info') info(doc);
+  if (cmd === 'info') {
+    const { flags } = splitFlags(rest, ['json']);
+    if (flags.json) console.log(JSON.stringify(infoReport(doc), null, 2));
+    else info(doc);
+  }
   else if (cmd === 'seq') {
     if (rest[0]) {
       const r = parseRegion(rest[0], L);
@@ -406,14 +454,20 @@ try {
       for (let i = 0; i < L; i += 60) console.log(`${String(i + 1).padStart(8)}  ${doc.seq.slice(i, i + 60).toLowerCase().match(/.{1,10}/g).join(' ')}`);
     }
   } else if (cmd === 'cut') {
-    const { positional, flags } = splitFlags(rest, ['n', 'unique']);
-    cut(doc, positional[0], flags);
+    const { positional, flags } = splitFlags(rest, ['n', 'unique', 'json']);
+    if (flags.json) console.log(JSON.stringify({ schema: 'bublagene/report/1', name: doc.name, enzymes: cutReport(doc, positional[0], flags) }, null, 2));
+    else cut(doc, positional[0], flags);
   }
   else if (cmd === 'digest') {
     const { positional } = splitFlags(rest, []);
     const names = (positional[0] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
     if (!names.length) throw new Error('Usage: bg digest <file> <enzyme,...>');
     const rows = fragmentTable(doc.seq, doc.circular, names);
+    const { flags } = splitFlags(rest, ['json']);
+    if (flags.json) {
+      console.log(JSON.stringify({ schema: 'bublagene/report/1', name: doc.name, circular: doc.circular, length: doc.seq.length, enzymes: rows }, null, 2));
+      process.exit(0);
+    }
     for (const row of rows) {
       console.log(`${row.name}  ${row.count} site(s)`);
       for (const f of row.fragments) {
@@ -464,12 +518,16 @@ try {
     }
   } else if (cmd === 'composition') {
     const c = nucleotideCount(doc.seq);
+    const { flags } = splitFlags(rest, ['json']);
+    if (flags.json) { console.log(JSON.stringify({ schema: 'bublagene/report/1', name: doc.name, ...c }, null, 2)); process.exit(0); }
     console.log(`${doc.name}: ${c.length} bp, GC ${c.gcPercent.toFixed(1)}%`);
     for (const k of ['A', 'C', 'G', 'T', 'U', 'N']) if (c[k]) console.log(`  ${k}: ${c[k]}`);
   }
   else if (cmd === 'orfs') {
     const min = Number(rest[0] ?? 100);
     const orfs = findOrfs(doc.seq, doc.circular, min);
+    const { flags } = splitFlags(rest, ['json']);
+    if (flags.json) { console.log(JSON.stringify({ schema: 'bublagene/report/1', minCodons: min, orfs }, null, 2)); process.exit(0); }
     console.log(`${orfs.length} ORF(s) of at least ${min} codons`);
     for (const o of orfs) console.log(`  ${pad(o.codons + ' codons', 14)} ${o.strand === 1 ? '+' : '-'} ${num(o.start + 1)}..${num(o.end)}`);
   } else if (cmd === 'primers' || cmd === 'design') {
@@ -591,7 +649,82 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'export') {
+  } else if (cmd === 'report') {
+    const { flags } = splitFlags(rest, ['orfs', 'enzymes', 'sequence', 'out']);
+    const report = infoReport(doc);
+    report.created = new Date().toISOString();
+    if (flags.orfs) report.orfs = findOrfs(doc.seq, doc.circular, Number(flags.orfs));
+    if (flags.enzymes) report.enzymes = fragmentTable(doc.seq, doc.circular, String(flags.enzymes).split(','));
+    if (flags.sequence) report.sequence = doc.seq;
+    const text = JSON.stringify(report, null, 2);
+    if (flags.out) { writeFileSync(flags.out, `${text}\n`); console.log(`Wrote ${flags.out}`); }
+    else console.log(text);
+  } else if (cmd === 'pipeline') {
+    const stepsPath = rest[0];
+    if (!stepsPath) throw new Error('Usage: bg pipeline <file> <steps.json>');
+    const spec = JSON.parse(readFileSync(stepsPath, 'utf8'));
+    const steps = Array.isArray(spec) ? spec : spec.steps;
+    if (!Array.isArray(steps)) throw new Error('Pipeline needs a "steps" array');
+    const results = [];
+    let currentDoc = doc;
+    for (const [index, step] of steps.entries()) {
+      const op = step.op ?? step.command;
+      try {
+        if (op === 'info') results.push({ index, op, result: infoReport(currentDoc) });
+        else if (op === 'digest') {
+          const names = step.enzymes ?? ['EcoRI'];
+          results.push({ index, op, result: fragmentTable(currentDoc.seq, currentDoc.circular, names) });
+        } else if (op === 'cut') {
+          results.push({ index, op, result: cutReport(currentDoc, (step.enzymes ?? COMMON_SET.join(',')), {}) });
+        } else if (op === 'pcr') {
+          const r = simulatePCR(currentDoc, step.forward, step.reverse, { minAnneal: step.minAnneal ?? 15, maxMismatches: step.maxMismatches ?? 0, threePrimeExact: step.threePrimeExact ?? 1 });
+          currentDoc = r.doc;
+          results.push({ index, op, result: { length: r.doc.seq.length, sequence: r.doc.seq, warnings: r.warnings } });
+        } else if (op === 'design') {
+          const m = /^(\d+)\.\.(\d+)$/.exec(step.region ?? '');
+          if (!m) throw new Error('design needs a 1-based region like 1..100');
+          const d = designPrimerPairs(currentDoc.seq, currentDoc.circular, Number(m[1]) - 1, Number(m[2]), { targetTm: step.tm ?? 60 });
+          results.push({ index, op, result: { forward: d.forward, reverse: d.reverse, productLength: d.productLength, warnings: d.warnings } });
+        } else if (op === 'variants') {
+          const query = step.query ? load(step.query) : null;
+          if (!query) throw new Error('variants needs a query file');
+          const r = callVariants(currentDoc.seq, query.seq, { circular: step.circular ?? currentDoc.circular });
+          results.push({ index, op, result: { identity: r.identity, variants: r.variants } });
+        } else if (op === 'align') {
+          const query = load(step.query);
+          const r = alignPair(currentDoc.seq, query.seq, { local: !!step.local, band: step.band ?? null });
+          results.push({ index, op, result: { score: r.score, identity: r.identity, matches: r.matches, mismatches: r.mismatches, gaps: r.gaps } });
+        } else if (op === 'crispr') {
+          const guides = findGuides(currentDoc.seq, { enzyme: step.enzyme ?? 'SpCas9', circular: currentDoc.circular, maxOffTargets: step.offTargets ?? null });
+          results.push({ index, op, result: { count: guides.length, guides: guides.slice(0, step.limit ?? 20) } });
+        } else if (op === 'fold') {
+          const r = fold(currentDoc.seq, { maxLength: step.maxLength ?? 250 });
+          results.push({ index, op, result: { energy: r.energy, structure: r.structure, model: r.model } });
+        } else if (op === 'translate') {
+          results.push({ index, op, result: { protein: translate(currentDoc.seq, step.table ?? 1) } });
+        } else if (op === 'export') {
+          const out = step.out ?? `export.${step.format ?? 'gb'}`;
+          const ext = extname(out).toLowerCase();
+          if (ext === '.gff3' || ext === '.gff') writeFileSync(out, writeGFF3(currentDoc));
+          else if (ext === '.bed') writeFileSync(out, writeBED(currentDoc));
+          else if (ext === '.csv') writeFileSync(out, writeFeatureCSV(currentDoc));
+          else if (ext === '.svg') writeFileSync(out, exportSVG(currentDoc));
+          else if (ext === '.png') writeFileSync(out, exportPNG(currentDoc));
+          else if (ext === '.pdf') writeFileSync(out, exportPDF(currentDoc));
+          else if (ext === '.gb' || ext === '.gbk') writeFileSync(out, writeGenBank(currentDoc));
+          else if (ext === '.fasta' || ext === '.fa') writeFileSync(out, writeFasta(currentDoc));
+          else throw new Error(`Don't know how to export ${ext}`);
+          results.push({ index, op, result: { out, bytes: readFileSync(out).length } });
+        } else {
+          throw new Error(`Unknown pipeline op "${op}"`);
+        }
+      } catch (e) {
+        results.push({ index, op, error: e.message });
+      }
+    }
+    console.log(JSON.stringify({ schema: 'bublagene/pipeline/1', created: new Date().toISOString(), seed: spec.seed ?? 1, input: doc.name, results }, null, 2));
+  }
+  else if (cmd === 'export') {
     const out = rest[0];
     if (!out) throw new Error('Usage: bg export <file> <out.gff3|.bed|.csv|.txt|.svg|.png|.pdf>');
     const ext = extname(out).toLowerCase();
@@ -603,12 +736,16 @@ try {
     else if (ext === '.png') writeFileSync(out, exportPNG(doc));
     else if (ext === '.pdf') writeFileSync(out, exportPDF(doc));
     else throw new Error(`Don't know how to export ${ext}`);
-    console.log(`Wrote ${out}`);
+    const { flags } = splitFlags(rest.slice(1), ['json']);
+    if (flags.json) console.log(JSON.stringify({ schema: 'bublagene/report/1', out, format: ext.replace('.', ''), bytes: readFileSync(out).length }, null, 2));
+    else console.log(`Wrote ${out}`);
   }
   else if (cmd === 'search') {
     const query = rest[0];
     if (!query) throw new Error('Usage: bg search <file> <query>');
     const hits = searchAll(doc, query);
+    const { flags } = splitFlags(rest.slice(1), ['json']);
+    if (flags.json) { console.log(JSON.stringify({ schema: 'bublagene/report/1', query, hits }, null, 2)); process.exit(0); }
     console.log(`${hits.length} hit(s) for ${JSON.stringify(query)}`);
     for (const hit of /** @type {any[]} */ (hits).slice(0, 80)) {
       if (hit.kind === 'sequence') console.log(`  sequence ${hit.strand === 1 ? '+' : '-'} ${num(hit.start + 1)}..${num(hit.end)}`);
@@ -622,10 +759,11 @@ try {
       seq = subseq(doc.seq, r.start, r.end, doc.circular);
       where = `${r.start + 1}..${r.end}`;
     }
+    const frames = sixFrameTranslation(seq);
+    const { flags } = splitFlags(rest.slice(1), ['json']);
+    if (flags.json) { console.log(JSON.stringify({ schema: 'bublagene/report/1', where, frames }, null, 2)); process.exit(0); }
     console.log(`${where}: six frames`);
-    for (const f of sixFrameTranslation(seq)) {
-      console.log(`  ${f.strand === 1 ? '+' : '−'}${f.frame}  ${f.protein.slice(0, 120)}${f.protein.length > 120 ? '…' : ''}`);
-    }
+    for (const f of frames) console.log(`  ${f.strand === 1 ? '+' : '−'}${f.frame}  ${f.protein.slice(0, 120)}${f.protein.length > 120 ? '…' : ''}`);
   }
   else if (cmd === 'fold') {
     const { positional, flags } = splitFlags(rest, ['max-length', 'svg', 'json', 'width']);
@@ -765,8 +903,8 @@ try {
       circular: !flags.linear, minOverlap: Number(flags['min-overlap'] ?? 15),
       name: flags.name ?? 'Assembly',
     });
-    printRecord(result.doc.cloning, `Homology assembly (${fragments.length} fragments)`, result.doc.seq.length, result.warnings, result.doc.features.length);
     if (flags.json) console.log(JSON.stringify(result.plan, null, 2));
+    else printRecord(result.doc.cloning, `Homology assembly (${fragments.length} fragments)`, result.doc.seq.length, result.warnings, result.doc.features.length);
     if (out) {
       saveDoc(result.doc, out);
       console.log(`Wrote ${out}`);
@@ -779,9 +917,11 @@ try {
     const result = goldenGateAssemble(fragments, {
       circular: !flags.linear, enzyme: flags.enzyme ?? 'BsaI', name: flags.name ?? 'Golden Gate construct',
     });
-    for (const c of result.checks) console.log(`  ${c.severity}: ${c.message}`);
-    printRecord(result.doc.cloning, `Golden Gate assembly with ${flags.enzyme ?? 'BsaI'}`, result.doc.seq.length, result.warnings, result.doc.features.length);
     if (flags.json) console.log(JSON.stringify(result.plan, null, 2));
+    else {
+      for (const c of result.checks) console.log(`  ${c.severity}: ${c.message}`);
+      printRecord(result.doc.cloning, `Golden Gate assembly with ${flags.enzyme ?? 'BsaI'}`, result.doc.seq.length, result.warnings, result.doc.features.length);
+    }
     if (flags.plan) { writeFileSync(flags.plan, `${JSON.stringify(result.plan, null, 2)}\n`); console.log(`Wrote ${flags.plan}`); }
   } else if (cmd === 'assembly-primers') {
     const { positional, flags } = splitFlags(rest, ['overlap', 'tm']);

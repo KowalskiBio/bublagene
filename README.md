@@ -41,6 +41,10 @@ from the built-in example.
   the sequence they describe and are marked stale by any edit; named indexes
   and caches key on the same digest. FASTA can be streamed with a per-record
   memory cap, and simulations use a seeded PRNG.
+- **Automation.** Every engine has a CLI command, and `--json` is available on
+  the pipeline-facing commands. `bg report` emits one comprehensive report;
+  `bg pipeline` runs a JSON step list (info, design, PCR, digest, cut, variants,
+  align, CRISPR, fold, translate, export) and records a seed so runs reproduce.
 - **Portable data out and back.** GFF3, BED, CSV feature tables, a plain-text
   map and SVG/PNG/PDF diagrams; project archives keep sequences, features,
   primers, cloning/assembly records, alignments and settings with stable IDs.
@@ -187,6 +191,8 @@ node tools/bg.mjs info plasmid.dna
 | `bg frames <file> [start..end]` | six-frame translation |
 | `bg export <file> <out>` | GFF3, BED, CSV, text map, SVG, PNG or PDF |
 | `bg project save\|open ...` | lossless project archive with migrations |
+| `bg report <file>` | comprehensive JSON report (`--orfs`, `--enzymes`, `--sequence`) |
+| `bg pipeline <file> <steps.json>` | run a reproducible JSON pipeline and print one report |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,
@@ -260,9 +266,13 @@ js/ui/dom.js           DOM helpers (for the interface that isn't built yet)
 tools/bg.mjs           the command line
 ```
 
-## Not built
+## Scope and limits
 
-- The digest/gel and primer panels work but have had less testing than the map and sequence views.
+- Genetic codes, alternative PAMs and RNA folding are bounded to the models
+  documented in their modules; CRISPR off-target scores are heuristics, not
+  cleavage predictions.
+- Folding refuses inputs longer than its stated limit, and the trace readers
+  interpret the common ABI/SCF layouts rather than every writer variant.
 
 ## Licence
 
