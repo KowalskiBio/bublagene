@@ -37,6 +37,10 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Chromatograms.** ABI (`.ab1`) and SCF traces are decoded into four dye
+  channels, called bases, peak positions and Phred qualities (ZTR was already
+  supported). Mott or Phred trimming returns base coordinates, can add trim
+  features, and slices keep the sample coordinates for a synchronized view.
 - **Alignment and variation.** Affine-gap global, local and banded alignment
   with identity/mismatch statistics and dot plots; quality-weighted contig
   assembly from Sanger reads; normalised SNP/indel/MNV calls with
@@ -144,6 +148,8 @@ node tools/bg.mjs info plasmid.dna
 | `bg dotplot <a> <b>` | dot-plot grid |
 | `bg contig <r1> <r2> ...` | quality-aware contig assembly and consensus |
 | `bg variants <ref> <query>` | SNPs/indels with normalised representation |
+| `bg trace <trace.ab1\|.scf>` | chromatogram summary and quality |
+| `bg trim <trace> [flags]` | Mott/Phred trimming, optionally writing FASTA |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,

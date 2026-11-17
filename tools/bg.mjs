@@ -24,6 +24,8 @@
 //   bg dotplot   <a> <b>                        dot-plot grid
 //   bg contig    <r1> <r2> ...                  assemble reads into contigs
 //   bg variants  <ref> <query> [--features]     SNPs/indels between two sequences
+//   bg trace     <trace.ab1|.scf>               chromatogram summary
+//   bg trim      <trace> [--mode mott|phred] [--cutoff 20] [--out out.fasta]
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -44,6 +46,7 @@ import { homologyAssemble, goldenGateAssemble, designAssemblyPrimers, assemblyPl
 import { alignGlobal, alignLocal, alignPair, alignBanded, dotPlot, dotPlotText, formatAlignment } from '../js/align.js';
 import { assembleContigs } from '../js/contig.js';
 import { callVariants, variantsToFeatures, formatVariant } from '../js/variants.js';
+import { readTrace, trimTrace, qualityStats, traceToDocument } from '../js/traces.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
@@ -321,6 +324,28 @@ try {
       results: batch.results.map((r) => ({ name: r.name, ok: r.ok, length: r.doc?.seq.length, error: r.error })),
     }, null, 2));
     process.exit(batch.failed ? 1 : 0);
+  }
+  if (cmd === 'trace' || cmd === 'trim') {
+    if (!file) throw new Error(`Usage: bg ${cmd} <trace.ab1|.scf> [flags]`);
+    const { flags } = splitFlags(rest, ['mode', 'cutoff', 'window', 'out', 'json']);
+    const trace = await readTrace(readFileSync(file), basename(file));
+    const stats = qualityStats(trace);
+    const trim = trimTrace(trace, { mode: flags.mode ?? 'mott', cutoff: Number(flags.cutoff ?? 20), window: Number(flags.window ?? 10) });
+    if (flags.json) {
+      console.log(JSON.stringify({ format: trace.format, name: trace.name, bases: trace.bases.length, samples: trace.sampleCount, quality: stats, trim }, null, 2));
+    } else {
+      console.log(`${trace.format} trace ${trace.name || basename(file)}: ${num(trace.bases.length)} bases, ${num(trace.sampleCount)} samples`);
+      console.log(`  quality: mean ${stats.mean.toFixed(1)}, min ${stats.min}, max ${stats.max}`);
+      console.log(`  trim (${trim.mode}, cutoff ${trim.cutoff}): keep ${trim.start + 1}..${trim.end} (${trim.length} bases), mean ${trim.mean.toFixed(1)}`);
+      console.log(`  ${trace.bases.slice(trim.start, Math.min(trim.end, trim.start + 100))}${trim.length > 100 ? '…' : ''}`);
+    }
+    if (cmd === 'trim' && flags.out) {
+      const doc = traceToDocument(trace, { trimmed: false });
+      doc.seq = trace.bases.slice(trim.start, trim.end);
+      writeFileSync(flags.out, writeFasta(doc));
+      console.log(`Wrote ${flags.out} (${doc.seq.length} bases)`);
+    }
+    process.exit(0);
   }
   if (!file) throw new Error('Give a file to work on');
   const doc = load(file);
