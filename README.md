@@ -37,6 +37,10 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Portable data out and back.** GFF3, BED, CSV feature tables, a plain-text
+  map and SVG/PNG/PDF diagrams; project archives keep sequences, features,
+  primers, cloning/assembly records, alignments and settings with stable IDs.
+  Native records carry schema versions and older ones migrate forward on read.
 - **Editing that stays reversible.** A coalescing undo/redo history, feature
   filtering by name/type/qualifier, six-frame translation, and search across
   sequence and annotations. Browser save/open prefers the File System Access
@@ -172,6 +176,8 @@ node tools/bg.mjs info plasmid.dna
 | `bg fold <file> [start..end]` | bounded MFE structure, dot-bracket or SVG |
 | `bg search <file> <query>` | sequence, feature and qualifier search |
 | `bg frames <file> [start..end]` | six-frame translation |
+| `bg export <file> <out>` | GFF3, BED, CSV, text map, SVG, PNG or PDF |
+| `bg project save\|open ...` | lossless project archive with migrations |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,

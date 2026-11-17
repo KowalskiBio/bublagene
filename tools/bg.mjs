@@ -32,6 +32,8 @@
 //   bg fold      <file> [start..end]     bounded MFE structure (--svg out.svg)
 //   bg search    <file> <query>          sequence, feature and qualifier search
 //   bg frames    <file> [start..end]     six-frame translation
+//   bg export    <file> <out.gff3|.bed|.csv|.txt|.svg|.png|.pdf>
+//   bg project   save <out.json> <files...> | open <project.json> <outdir>
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -58,6 +60,9 @@ import { fold, structureToText, structureToSvg } from '../js/fold.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, sixFrameTranslation, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
 import { searchAll, filterFeatures } from '../js/search.js';
+import { writeGFF3, writeBED, writeFeatureCSV, writePlainMap } from '../js/formats/features.js';
+import { exportSVG, exportPNG, exportPDF } from '../js/export.js';
+import { projectToJSON, projectFromJSON } from '../js/project.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
 
 const [, , cmd, file, ...rest] = process.argv;
@@ -240,6 +245,36 @@ try {
     const checks = validateAllTables();
     console.log(`NCBI genetic codes available: ${TABLE_IDS.join(', ')}`);
     for (const v of checks) console.log(`  ${String(v.id).padStart(2)}  ${pad(v.name, 48)} ${v.ok ? 'ok' : `INVALID: ${v.issues.join(', ')}`}`);
+    process.exit(0);
+  }
+  if (cmd === 'project') {
+    const sub = file;
+    const { positional } = splitFlags(rest, []);
+    if (sub === 'save') {
+      const out = positional[0];
+      const inputs = positional.slice(1);
+      if (!out || !inputs.length) throw new Error('Usage: bg project save <out.json> <file...>');
+      const docs = inputs.map((p) => load(p));
+      writeFileSync(out, projectToJSON(docs, { active: 0 }));
+      console.log(`Wrote ${out} (${docs.length} document(s))`);
+    } else if (sub === 'open') {
+      const input = positional[0];
+      const outDir = positional[1] ?? '.';
+      if (!input) throw new Error('Usage: bg project open <project.json> <outdir>');
+      const project = projectFromJSON(readFileSync(input, 'utf8'));
+      const { mkdirSync } = await import('node:fs');
+      mkdirSync(outDir, { recursive: true });
+      for (const [i, d] of project.docs.entries()) {
+        const base = `${outDir}/${String(i + 1).padStart(2, '0')}-${d.name.replace(/[^\w.-]+/g, '_')}`;
+        writeFileSync(`${base}.gb`, writeGenBank(d));
+        if (d.cloning) writeFileSync(`${base}.cloning.json`, `${JSON.stringify(d.cloning, null, 2)}\n`);
+        if (d.assembly) writeFileSync(`${base}.assembly.json`, `${JSON.stringify(d.assembly, null, 2)}\n`);
+        console.log(`Wrote ${base}.gb${d.cloning ? ' (+cloning)' : ''}${d.assembly ? ' (+assembly)' : ''}`);
+      }
+      for (const w of project.warnings) console.log(`note: ${w}`);
+    } else {
+      throw new Error('Usage: bg project save|open ...');
+    }
     process.exit(0);
   }
   if (cmd === 'gel') {
@@ -556,7 +591,21 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'search') {
+  } else if (cmd === 'export') {
+    const out = rest[0];
+    if (!out) throw new Error('Usage: bg export <file> <out.gff3|.bed|.csv|.txt|.svg|.png|.pdf>');
+    const ext = extname(out).toLowerCase();
+    if (ext === '.gff3' || ext === '.gff') writeFileSync(out, writeGFF3(doc));
+    else if (ext === '.bed') writeFileSync(out, writeBED(doc));
+    else if (ext === '.csv') writeFileSync(out, writeFeatureCSV(doc));
+    else if (ext === '.txt' || ext === '.map') writeFileSync(out, writePlainMap(doc));
+    else if (ext === '.svg') writeFileSync(out, exportSVG(doc));
+    else if (ext === '.png') writeFileSync(out, exportPNG(doc));
+    else if (ext === '.pdf') writeFileSync(out, exportPDF(doc));
+    else throw new Error(`Don't know how to export ${ext}`);
+    console.log(`Wrote ${out}`);
+  }
+  else if (cmd === 'search') {
     const query = rest[0];
     if (!query) throw new Error('Usage: bg search <file> <query>');
     const hits = searchAll(doc, query);
