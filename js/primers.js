@@ -8,6 +8,7 @@
 // secondary structure and how many extra binding sites each primer has.
 
 import { revcomp, meltingTemp, gcContent, mod, subseq } from './seq.js';
+import { memoLatest } from './cache.js';
 import { primerProperties, duplexThermo, hairpin, dimer, pairDimer, clampScore } from './thermo.js';
 import { newDocument, newId, addHistory, featuresInRegion } from './model.js';
 import { ENZYME_BY_NAME, LADDERS, migration } from './enzymes.js';
@@ -17,7 +18,7 @@ const mismatch = (a, b) => (a === b ? 0 : 1);
 // Where does a primer anneal? Returns [{strand, start, end, annealed, tail, tm,
 // mismatches, exact}] in top-strand coordinates. `end` for a forward site is the
 // 3' end; for a reverse site `start` is the 3' end (the primer reads right-to-left).
-export function findBindingSites(seq, circular, primer, minAnneal = 15, {
+function scanBindingSites(seq, circular, primer, minAnneal = 15, {
   maxMismatches = 0, threePrimeExact = 1, maxSites = 200,
 } = {}) {
   const p = String(primer).toUpperCase().replace(/U/g, 'T');
@@ -99,6 +100,9 @@ export function findBindingSites(seq, circular, primer, minAnneal = 15, {
     return true;
   });
 }
+
+/** Cached: the map redraws primer sites on every edit and keystroke. */
+export const findBindingSites = memoLatest(scanBindingSites, (circular, primer, minAnneal = 15, opts = {}) => `${circular ? 1 : 0}|${String(primer).toUpperCase()}|${minAnneal}|${JSON.stringify(opts ?? {})}`);
 
 // ---- design -----------------------------------------------------------------
 

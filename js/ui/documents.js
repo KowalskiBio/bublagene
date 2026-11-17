@@ -73,7 +73,9 @@ export function closeDoc(i) {
   render();
 }
 
-export function edit(label, mutate) {
+// Callers that adjust the selection or caret afterwards pass { redraw: false } and
+// render once themselves, so a keystroke does not redraw the page twice.
+export function edit(label, mutate, { redraw = true } = {}) {
   const doc = current();
   if (!doc) return;
   const stack = undo.get(doc.id);
@@ -88,7 +90,7 @@ export function edit(label, mutate) {
   if (state.selection && (state.selection.end > doc.seq.length || state.selection.start > doc.seq.length)) state.selection = null;
   if (state.caret !== null && state.caret > doc.seq.length) state.caret = doc.seq.length;
   addHistory(doc, 'edit', label);
-  render();
+  if (redraw) render();
 }
 
 // Replace the selection with typed text. Cancelling the prompt must leave the
@@ -100,7 +102,7 @@ export function replaceSelection() {
   if (answer === null) return;
   const seq = cleanSequence(answer);
   if (!seq) return;
-  edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); });
+  edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); }, { redraw: false });
   state.selection = { start: sel.start, end: sel.start + seq.length };
   render();
 }
@@ -108,7 +110,7 @@ export function replaceSelection() {
 export function deleteSelection() {
   const sel = state.selection;
   if (!sel) return;
-  edit('Delete selection', (d) => { replaceRange(d, sel.start, sel.end, ''); });
+  edit('Delete selection', (d) => { replaceRange(d, sel.start, sel.end, ''); }, { redraw: false });
   state.selection = null;
   render();
 }

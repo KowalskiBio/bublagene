@@ -16,7 +16,7 @@ export function insertAtCaret(text, label = 'Type bases') {
   const at = sel ? sel.start : state.caret;
   if (at === null || at === undefined) return false;
   const wraps = !!sel && sel.end < sel.start; // a wrapping selection rotates the origin to its start
-  edit(label, (d) => { replaceRange(d, at, sel ? sel.end : at, text); });
+  edit(label, (d) => { replaceRange(d, at, sel ? sel.end : at, text); }, { redraw: false });
   state.selection = null;
   state.caret = (wraps ? 0 : at) + text.length;
   render();
@@ -32,7 +32,7 @@ export function deleteAtCaret(dir) {
   if (at === null) return false;
   const from = dir < 0 ? at - 1 : at;
   if (from < 0 || from + 1 > doc.seq.length) return true; // at an end: nothing to remove
-  edit('Delete bases', (d) => { replaceRange(d, from, from + 1, ''); });
+  edit('Delete bases', (d) => { replaceRange(d, from, from + 1, ''); }, { redraw: false });
   state.caret = from;
   render();
   return true;

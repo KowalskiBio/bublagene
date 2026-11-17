@@ -5,6 +5,8 @@
 // G^AATT_C -> top 1, bottom 5. Type IIS enzymes cut outside the site
 // (BsaI GGTCTC(1/5) -> top 7, bottom 11).
 
+import { memoLatest } from './cache.js';
+
 const RAW = [
   ['AatII', 'GACGTC', 5, 1], ['Acc65I', 'GGTACC', 1, 5], ['AflII', 'CTTAAG', 1, 5],
   ['AgeI', 'ACCGGT', 1, 5], ['AleI', 'CACNNNNGTG', 5, 5], ['AluI', 'AGCT', 2, 2],
@@ -108,7 +110,7 @@ export function overhangLabel(e) {
 
 // Find every cut site of `enzyme`. Returns [{enzyme, site: {start, end}, strand, top, bottom}]
 // where top/bottom are absolute cut positions (between base top-1 and top).
-export function findSites(seq, circular, enzyme) {
+function scanSites(seq, circular, enzyme) {
   const L = seq.length;
   const n = enzyme.site.length;
   if (n > L) return [];
@@ -135,6 +137,9 @@ export function findSites(seq, circular, enzyme) {
   if (!isPalindrome(enzyme)) scan(revcomp(enzyme.site), -1);
   return out.sort((a, b) => a.top - b.top);
 }
+
+/** Cached per enzyme: the map, digest and panels all ask again after every redraw. */
+export const findSites = memoLatest(scanSites, (circular, enzyme) => `${circular ? 1 : 0}|${enzyme.name}|${enzyme.site}|${enzyme.top}|${enzyme.bottom}`);
 
 export function findAllSites(seq, circular, enzymes = ENZYMES) {
   const map = new Map();

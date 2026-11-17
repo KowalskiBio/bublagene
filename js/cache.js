@@ -64,3 +64,29 @@ export function stampAlignment(doc, record) {
 export function getIndex(doc, name, compute, { cache = doc.__cache ?? (doc.__cache = new SequenceCache()) } = {}) {
   return cache.get(name, doc.seq, compute);
 }
+
+/**
+ * Remember the latest answer of a whole-sequence scan. The first argument is the
+ * sequence; `keyOf` turns the other arguments into a string. One entry is kept per
+ * key, so memory stays bounded and an edit simply replaces the stale answer.
+ * Callers must treat the returned value as read-only.
+ * @template {(seq: string, ...rest: any[]) => any} F
+ * @param {F} fn
+ * @param {(...rest: any[]) => string} keyOf
+ * @param {number} [limit]
+ * @returns {F}
+ */
+export function memoLatest(fn, keyOf, limit = 1024) {
+  /** @type {Map<string, {seq: string, value: any}>} */
+  const store = new Map();
+  return /** @type {F} */ ((seq, ...rest) => {
+    const key = keyOf(...rest);
+    const hit = store.get(key);
+    if (hit && hit.seq === seq) return hit.value;
+    const value = fn(seq, ...rest);
+    store.delete(key);
+    store.set(key, { seq, value });
+    if (store.size > limit) store.delete(store.keys().next().value);
+    return value;
+  });
+}

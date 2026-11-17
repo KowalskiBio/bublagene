@@ -5,7 +5,7 @@ import { h, s, clear, fmt, toast } from './dom.js';
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, overhangLabel, migration, LADDERS } from '../enzymes.js';
 import { findBindingSites, designPrimers, simulatePCR } from '../primers.js';
 import { featureSpan, featureLength, codingSequence, colorFor, FEATURE_TYPES, featureLabel, newId, qualifierText, addHistory, recomputeFeature, setQualifier } from '../model.js';
-import { gcContent, meltingTemp, translate, sixFrameTranslation, revcomp, subseq, rangeLength, findOrfs, cleanSequence } from '../seq.js';
+import { gcContent, meltingTemp, translate, sixFrameTranslation, revcomp, subseq, rangeLength, cleanSequence } from '../seq.js';
 import { filterFeatures, searchFeatures } from '../search.js';
 import { alignPair, dotPlot } from '../align.js';
 import { findGuides, guidesToFeatures, nhejEdit, hdrEdit, editPrimers } from '../crispr.js';
@@ -15,6 +15,7 @@ import { describeSegments } from '../formats/dna.js';
 import { cloningPanel } from './cloningpanel.js';
 import { historyPanel, plotPanel, proteinPanel, contigsPanel, searchPanel, libraryPanel, msaSection } from './panels2.js';
 import { aminoAcidChange } from '../mutagenesis.js';
+import { orfsFor } from './overlays.js';
 import { methylationSummary, METHYLATION_LABEL, HOST_NOTE } from '../methylation.js';
 import { primerProperties, pairDimer } from '../thermo.js';
 
@@ -129,7 +130,7 @@ function features(el, { doc, state, api }) {
     if (region.length < doc.seq.length) el.append(h('p', { class: 'sub' }, 'Select a region to translate just that part.'));
   }
 
-  const orfs = findOrfs(doc.seq, doc.circular, 100);
+  const orfs = orfsFor(doc, 100);
   el.append(h('h3', {}, `Open reading frames (${orfs.length})`));
   if (!orfs.length) el.append(h('p', { class: 'empty' }, 'None of at least 100 codons.'));
   for (const o of orfs.slice(0, 12)) {

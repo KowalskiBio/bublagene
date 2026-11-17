@@ -3,6 +3,7 @@
 // sequences a range may wrap (end <= start means it crosses the origin).
 
 import { translateWithTable, DEFAULT_TABLE } from './codon-tables.js';
+import { memoLatest } from './cache.js';
 
 const COMP = {
   A: 'T', T: 'A', G: 'C', C: 'G', U: 'A', N: 'N',
@@ -228,10 +229,9 @@ export function meltingTemp(s, { na = 0.05, oligo = 250e-9 } = {}) {
 
 // Open reading frames (ATG ... stop) of at least minCodons codons, both strands.
 // For each stop codon only the longest ORF (first ATG) is reported.
-export function findOrfs(seq, circular, minCodons = 100) {
+function scanOrfs(seq, circular, minCodons = 100) {
   const L = seq.length;
   const out = [];
-  const STOPS = new Set(['TAA', 'TAG', 'TGA']);
   const scan = (s, strand) => {
     const hay = circular ? s + s + s.slice(0, 2) : s;
     const limit = circular ? 2 * L : L;
@@ -239,9 +239,12 @@ export function findOrfs(seq, circular, minCodons = 100) {
     for (let frame = 0; frame < 3; frame++) {
       let atg = -1;
       for (let i = frame; i + 3 <= hay.length && i < limit; i += 3) {
-        const c = hay.slice(i, i + 3);
-        if (atg < 0 && c === 'ATG') atg = i;
-        if (STOPS.has(c)) {
+        // compare character codes: slicing a codon per step made this the slowest scan on long sequences
+        const a = hay.charCodeAt(i);
+        const b = hay.charCodeAt(i + 1);
+        const g = hay.charCodeAt(i + 2);
+        if (atg < 0 && a === 65 && b === 84 && g === 71) atg = i;
+        if (a === 84 && ((b === 65 && (g === 65 || g === 71)) || (b === 71 && g === 65))) {
           if (atg >= 0 && atg < L) {
             const len = i + 3 - atg;
             const stopKey = (i + 3) % L;
@@ -266,3 +269,6 @@ export function findOrfs(seq, circular, minCodons = 100) {
     return { start, end, strand, codons: len / 3 - 1 };
   }).sort((a, b) => b.codons - a.codons);
 }
+
+/** Cached: six-frame scans are the slowest thing a redraw can ask for. */
+export const findOrfs = memoLatest(scanOrfs, (circular, minCodons = 100) => `${circular ? 1 : 0}|${minCodons}`);
