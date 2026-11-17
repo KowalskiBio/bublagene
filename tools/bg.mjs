@@ -20,6 +20,10 @@
 //   bg plan      <file>                 print and verify an assembly/cloning plan
 //   bg replay    <plan.json>            rebuild a product from its plan
 //   bg batch     <library.json> <designs.json>   many constructs in one run
+//   bg align     <a> <b> [--local] [--band N]   pairwise alignment
+//   bg dotplot   <a> <b>                        dot-plot grid
+//   bg contig    <r1> <r2> ...                  assemble reads into contigs
+//   bg variants  <ref> <query> [--features]     SNPs/indels between two sequences
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -37,6 +41,9 @@ import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhan
 import { findBindingSites, designPrimers, designPrimerPairs, simulatePCR, pcrDiagnostics, gelView } from '../js/primers.js';
 import { restrictionClone, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName } from '../js/cloning.js';
 import { homologyAssemble, goldenGateAssemble, designAssemblyPrimers, assemblyPlan, assemblyFromJSON, replayAssembly, batchAssembly } from '../js/assembly.js';
+import { alignGlobal, alignLocal, alignPair, alignBanded, dotPlot, dotPlotText, formatAlignment } from '../js/align.js';
+import { assembleContigs } from '../js/contig.js';
+import { callVariants, variantsToFeatures, formatVariant } from '../js/variants.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
@@ -515,7 +522,58 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'assemble') {
+  } else if (cmd === 'align') {
+    const { positional, flags } = splitFlags(rest, ['band', 'local', 'global', 'json', 'width']);
+    const other = positional.find((p) => !p.startsWith('-'));
+    if (!other) throw new Error('Usage: bg align <a> <b> [--local] [--band N]');
+    const b = load(other).seq;
+    const opts = {
+      local: !!flags.local,
+      band: flags.band != null ? Number(flags.band) : null,
+    };
+    const result = (opts.local ? alignLocal : alignPair)(doc.seq, b, opts);
+    if (flags.json) console.log(JSON.stringify({ score: result.score, identity: result.identity, matches: result.matches, mismatches: result.mismatches, gaps: result.gaps, alignedA: result.alignedA, alignedB: result.alignedB }, null, 2));
+    else console.log(formatAlignment(result, { width: Number(flags.width ?? 60) }));
+  } else if (cmd === 'dotplot') {
+    const { positional } = splitFlags(rest, []);
+    const other = positional.find((p) => !p.startsWith('-'));
+    if (!other) throw new Error('Usage: bg dotplot <a> <b>');
+    const b = load(other).seq;
+    console.log(dotPlotText(doc.seq, b));
+    const plot = dotPlot(doc.seq, b);
+    console.log(`${plot.points.length} point(s), ${plot.width}×${plot.height}`);
+  } else if (cmd === 'contig') {
+    const { positional, flags } = splitFlags(rest, ['min-overlap', 'json']);
+    const reads = [doc, ...positional.filter((p) => !p.startsWith('-')).map((p) => load(p))];
+    const contigs = assembleContigs(reads, { minOverlap: Number(flags['min-overlap'] ?? 30) });
+    if (flags.json) console.log(JSON.stringify(contigs.map((c) => ({ length: c.length, depth: c.depth, reads: c.reads, seq: c.seq })), null, 2));
+    else {
+      for (const [n, c] of contigs.entries()) {
+        console.log(`contig ${n + 1}: ${num(c.length)} bp, ${c.reads.length} read(s), mean depth ${c.depth}`);
+        console.log(`  ${c.seq.slice(0, 120)}${c.seq.length > 120 ? '…' : ''}`);
+      }
+      console.log(`${contigs.length} contig(s)`);
+    }
+  } else if (cmd === 'variants') {
+    const { positional, flags } = splitFlags(rest, ['circular', 'json', 'features', 'out']);
+    const other = positional.find((p) => !p.startsWith('-'));
+    if (!other) throw new Error('Usage: bg variants <reference> <query> [--circular] [--features out.gb]');
+    const query = load(other);
+    const result = callVariants(doc.seq, query.seq, { circular: !!flags.circular || doc.circular });
+    if (flags.json) {
+      console.log(JSON.stringify({ identity: result.identity, variants: result.variants.map((v) => ({ type: v.type, position: v.position, ref: v.ref, alt: v.alt })) }, null, 2));
+    } else {
+      console.log(`${result.variants.length} variant(s); identity ${result.identity.toFixed(1)}%`);
+      for (const v of result.variants) console.log(`  ${formatVariant(v)}`);
+    }
+    if (flags.features) {
+      const out = load(other);
+      out.features = [...out.features, ...variantsToFeatures(out, result.variants)];
+      saveDoc(out, flags.features);
+      console.log(`Wrote ${flags.features}`);
+    }
+  }
+  else if (cmd === 'assemble') {
     const { positional, flags } = splitFlags(rest, ['min-overlap', 'name', 'plan', 'json', 'linear', 'circular']);
     const out = positional.find((p) => p.endsWith('.dna') || p.endsWith('.gb') || p.endsWith('.fasta'));
     let paths = positional.filter((p) => p !== out);

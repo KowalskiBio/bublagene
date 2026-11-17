@@ -37,6 +37,10 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Alignment and variation.** Affine-gap global, local and banded alignment
+  with identity/mismatch statistics and dot plots; quality-weighted contig
+  assembly from Sanger reads; normalised SNP/indel/MNV calls with
+  reference-anchored coordinates that round-trip through `variation` features.
 - **Assembly that scales past two pieces.** Homology assembly joins up to 12
   fragments (scarless, circular or linear); Golden Gate joins Type IIS fragments
   by their overhangs. Junction checks cover duplicate overhangs, internal
@@ -136,6 +140,10 @@ node tools/bg.mjs info plasmid.dna
 | `bg assembly-primers <f1> <f2> ...` | PCR primers carrying the assembly overlaps |
 | `bg plan <file>` / `bg replay <plan.json>` | inspect or rebuild an assembly plan |
 | `bg batch <library.json> <designs.json>` | many constructs from one fragment library |
+| `bg align <a> <b> [--local] [--band N]` | affine-gap pairwise alignment with identity stats |
+| `bg dotplot <a> <b>` | dot-plot grid |
+| `bg contig <r1> <r2> ...` | quality-aware contig assembly and consensus |
+| `bg variants <ref> <query>` | SNPs/indels with normalised representation |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,

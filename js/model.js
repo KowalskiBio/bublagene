@@ -50,6 +50,7 @@ export const FEATURE_CATALOG = {
   'oriT': { label: 'Origin of transfer', icon: 'M4 12h16M15 8l5 4-5 4', color: '#d8c14a' },
   '5\'UTR': { label: "5' UTR", icon: 'M5 6h14M5 10h14M5 14h9', color: '#b0a0c0' },
   '3\'UTR': { label: "3' UTR", icon: 'M5 10h9M5 14h14M5 18h14', color: '#b0a0c0' },
+  variation: { label: 'Sequence variant', icon: 'M5 12h4l2-6 3 12 2-6h3', color: '#c06a6a' },
 };
 
 export const FEATURE_TYPES = Object.keys(FEATURE_CATALOG);
