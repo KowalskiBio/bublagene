@@ -1,19 +1,26 @@
 // @ts-nocheck — legacy DOM wiring; the engines it calls are type-checked.
 // The inspector panels on the right.
 
-import { h, clear, fmt, toast } from './dom.js';
+import { h, s, clear, fmt, toast } from './dom.js';
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, overhangLabel, migration, LADDERS } from '../enzymes.js';
 import { findBindingSites, designPrimers, simulatePCR } from '../primers.js';
-import { featureSpan, featureLength, codingSequence, colorFor, FEATURE_TYPES, newId, qualifierText, addHistory } from '../model.js';
-import { gcContent, meltingTemp, translate, sixFrameTranslation, revcomp, subseq, rangeLength, findOrfs } from '../seq.js';
+import { featureSpan, featureLength, codingSequence, colorFor, FEATURE_TYPES, featureLabel, newId, qualifierText, addHistory, recomputeFeature, setQualifier } from '../model.js';
+import { gcContent, meltingTemp, translate, sixFrameTranslation, revcomp, subseq, rangeLength, findOrfs, cleanSequence } from '../seq.js';
 import { filterFeatures, searchFeatures } from '../search.js';
+import { alignPair, dotPlot } from '../align.js';
+import { findGuides, guidesToFeatures, nhejEdit, hdrEdit, editPrimers } from '../crispr.js';
+import { callVariants, variantsToFeatures, formatVariant } from '../variants.js';
+import { structureToSvg } from '../fold.js';
 import { describeSegments } from '../formats/dna.js';
 
-export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'File'];
+export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'Alignment', 'CRISPR', 'Structure', 'File'];
 
 export function renderPanel(name, ctx) {
   const el = h('div');
-  ({ Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel, File: file })[name](el, ctx);
+  ({
+    Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel,
+    Alignment: alignmentPanel, CRISPR: crisprPanel, Structure: structurePanel, File: file,
+  })[name](el, ctx);
   return el;
 }
 
@@ -34,10 +41,18 @@ function features(el, { doc, state, api }) {
   const sorted = [...filtered].sort((a, b) => featureSpan(a).start - featureSpan(b).start);
   for (const f of sorted) {
     const span = featureSpan(f);
+    const picked = state.selectedFeatures?.has(f.id);
     const row = h('div', {
-      class: 'row', 'aria-current': String(state.highlight === f.id),
-      onclick: () => api.focusFeature(f),
+      class: 'row', 'aria-current': String(state.highlight === f.id), draggable: 'true',
+      ondragstart: (e) => { e.dataTransfer.setData('text/plain', f.id); e.dataTransfer.effectAllowed = 'move'; },
+      ondragover: (e) => e.preventDefault(),
+      ondrop: (e) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (id && id !== f.id) api.reorderFeature(id, f.id); },
+      onclick: (e) => { if (e.metaKey || e.ctrlKey) api.toggleFeatureSelected(f.id); else api.focusFeature(f); },
     },
+      h('input', {
+        type: 'checkbox', checked: picked, title: 'Select feature',
+        onclick: (e) => { e.stopPropagation(); api.toggleFeatureSelected(f.id); },
+      }),
       h('span', { class: 'swatch', style: { background: f.color } }),
       h('span', { class: 'label' },
         h('span', {}, f.name),
@@ -45,6 +60,17 @@ function features(el, { doc, state, api }) {
       h('span', { class: 'meta' }, `${fmt(span.start + 1)}–${fmt(span.end)} ${f.strand === -1 ? '←' : f.strand === 1 ? '→' : ''}`));
     el.append(row);
     if (state.highlight === f.id) el.append(featureDetail(f, { doc, state, api }));
+  }
+
+  const selected = doc.features.filter((f) => state.selectedFeatures?.has(f.id));
+  if (selected.length) {
+    el.append(h('h3', {}, `Selected (${selected.length})`));
+    el.append(h('div', { class: 'group' },
+      h('button', { class: 'btn', onclick: () => api.copySelectedFeatures() }, 'Copy sequences'),
+      h('button', { class: 'btn', onclick: () => api.setFeatureSelection(doc.features.map((f) => f.id)) }, 'Select all'),
+      h('button', { class: 'btn', danger: true, onclick: () => api.deleteSelectedFeatures() }, 'Delete selected'),
+      h('button', { class: 'btn', onclick: () => api.setFeatureSelection([]) }, 'Clear')));
+    el.append(h('p', { class: 'sub' }, '⌘-click rows to add or remove them; drag a row onto another to reorder the list.'));
   }
 
   el.append(h('h3', {}, 'Add'));
@@ -91,30 +117,77 @@ function features(el, { doc, state, api }) {
   }
 }
 
+function qualifierLines(f) {
+  return (f.qualifiers ?? []).flatMap((q) => q.values.map((v) => `${q.name}=${v.value}`)).join('\n');
+}
+
+function parseQualifierLines(text) {
+  const out = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const eq = line.indexOf('=');
+    const name = (eq < 0 ? line : line.slice(0, eq)).trim();
+    const value = eq < 0 ? '' : line.slice(eq + 1).trim();
+    if (!name) continue;
+    const prev = out[out.length - 1];
+    if (prev && prev.name === name) prev.values.push({ kind: /^-?\d+$/.test(value) ? 'int' : 'text', value });
+    else out.push({ name, values: [{ kind: /^-?\d+$/.test(value) ? 'int' : 'text', value }] });
+  }
+  return out;
+}
+
 function featureDetail(f, { doc, api }) {
   const L = doc.seq.length;
   const box = h('div', { style: { padding: '4px 8px 12px', borderLeft: '2px solid var(--accent)', margin: '2px 0 8px 6px' } });
+  const find = (d) => d.features.find((x) => x.id === f.id);
   box.append(h('label', { class: 'field' }, h('span', {}, 'Name'),
-    h('input', { value: f.name, onchange: (e) => api.edit('Rename feature', (d) => { d.features.find((x) => x.id === f.id).name = e.target.value; }) })));
+    h('input', { value: f.name, onchange: (e) => api.edit('Rename feature', (d) => { find(d).name = e.target.value; }) })));
   box.append(h('label', { class: 'field' }, h('span', {}, 'Type'),
     h('select', {
       onchange: (e) => api.edit('Change feature type', (d) => {
-        const t = d.features.find((x) => x.id === f.id);
+        const t = find(d);
         t.type = e.target.value;
         t.color = colorFor(e.target.value);
-        for (const s of t.segments) s.color = t.color;
+        for (const seg of t.segments) seg.color = t.color;
       }),
     }, FEATURE_TYPES.map((t) => h('option', { value: t, selected: t === f.type }, t)))));
+  box.append(h('div', { class: 'group', style: { alignItems: 'flex-end' } },
+    h('label', { class: 'field', style: { flex: '1 1 110px', marginBottom: '0' } },
+      h('span', {}, 'Strand'),
+      h('select', {
+        onchange: (e) => api.edit('Change strand', (d) => { find(d).strand = Number(e.target.value); }),
+      }, [['1', 'forward →'], ['-1', 'reverse ←'], ['0', 'none']].map(([v, t]) => h('option', { value: v, selected: Number(v) === f.strand }, t)))),
+    h('label', { class: 'field', style: { flex: '0 0 70px', marginBottom: '0' } },
+      h('span', {}, 'Colour'),
+      h('input', {
+        type: 'color', value: /^#[0-9a-f]{6}$/i.test(f.color) ? f.color : '#8c98a8',
+        onchange: (e) => api.edit('Change feature colour', (d) => {
+          const t = find(d);
+          t.color = e.target.value;
+          for (const seg of t.segments) seg.color = t.color;
+        }),
+      }))));
 
   const note = qualifierText(f, 'note') || qualifierText(f, 'product');
   if (note) box.append(h('p', { class: 'sub' }, note));
-  box.append(h('p', { class: 'sub' }, `${fmt(featureLength(f, L))} bp${f.segments.length > 1 ? `, ${f.segments.length} segments` : ''}`));
+  box.append(h('p', { class: 'sub' }, `${fmt(featureLength(f, L))} bp${f.segments.length > 1 ? `, ${f.segments.length} segments` : ''} · ${featureLabel(f.type)}`));
   if (f.type === 'CDS') {
     const prot = translate(codingSequence(doc, f));
     box.append(h('p', { class: 'sub mono', style: { wordBreak: 'break-all', maxHeight: '90px', overflow: 'auto' } }, prot));
   }
+  box.append(h('label', { class: 'field', style: { marginTop: '8px' } },
+    h('span', {}, 'Qualifiers (one name=value per line)'),
+    h('textarea', {
+      style: { minHeight: '74px' },
+      onchange: (e) => api.edit('Edit qualifiers', (d) => {
+        const t = find(d);
+        t.qualifiers = parseQualifierLines(e.target.value);
+        recomputeFeature(d, t);
+      }),
+    }, qualifierLines(f))));
   box.append(h('div', { class: 'group' },
     h('button', { class: 'btn', onclick: () => api.setSelection({ start: featureSpan(f).start, end: featureSpan(f).end }) }, 'Select'),
+    h('button', { class: 'btn', onclick: () => api.copy(api.featureSequence(f), 'bases') }, 'Copy sequence'),
     h('button', { class: 'btn', onclick: () => api.edit(`Delete ${f.name}`, (d) => { d.features = d.features.filter((x) => x.id !== f.id); }) }, 'Delete')));
   return box;
 }
@@ -305,6 +378,153 @@ function gel(sizes, ladderName, agarose) {
   return box;
 }
 
+// ---- Alignment -------------------------------------------------------------
+
+function alignmentPanel(el, { doc, state, api, others = [] }) {
+  el.append(h('h3', {}, 'Align to another document'));
+  if (!others.length) {
+    el.append(h('p', { class: 'empty' }, 'Open a second document to align against this one.'));
+    return;
+  }
+  const target = others.find((d) => d.id === state.alignTarget) ?? others[0];
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Reference'),
+    h('select', { onchange: (e) => api.setAlignTarget(e.target.value) },
+      others.map((d) => h('option', { value: d.id, selected: d.id === target.id }, `${d.name} (${fmt(d.seq.length)} bp)`)))));
+  el.append(h('div', { class: 'group' },
+    h('label', { class: 'sub', style: { display: 'flex', gap: '5px', alignItems: 'center' } },
+      h('input', { type: 'checkbox', checked: state.alignLocal, onchange: (e) => api.setAlignLocal(e.target.checked) }), 'Local'),
+    h('label', { class: 'sub', style: { display: 'flex', gap: '5px', alignItems: 'center' } },
+      'Band', h('input', { type: 'number', min: 0, value: state.alignBand ?? 0, style: { width: '62px' }, onchange: (e) => api.setAlignBand(Number(e.target.value)) }))));
+  el.append(h('div', { class: 'group', style: { marginTop: '8px' } },
+    h('button', { class: 'btn primary', disabled: state.alignBusy, onclick: () => api.runAlignment() }, state.alignBusy ? 'Aligning…' : 'Align'),
+    h('button', { class: 'btn', disabled: !state.alignResult || state.alignResult.docId !== doc.id, onclick: () => api.alignmentVariants() }, 'Make variant features')));
+
+  const result = state.alignResult?.docId === doc.id ? state.alignResult : null;
+  if (!result) { el.append(h('p', { class: 'empty' }, 'No alignment yet.')); return; }
+  if (result.error) { el.append(h('p', { class: 'empty' }, result.error)); return; }
+  const r = result.result;
+  el.append(h('p', { class: 'sub' }, `score ${fmt(r.score)} · identity ${r.identity.toFixed(1)}% · ${fmt(r.matches)} matches · ${fmt(r.mismatches)} mismatches · ${fmt(r.gaps)} gap columns`));
+  el.append(dotPlotSvg(doc.seq, target.seq, 260));
+  el.append(h('h3', {}, 'Aligned'));
+  el.append(alignmentText(r));
+  if (r.alignedA.length > 2000) el.append(h('p', { class: 'sub' }, 'Showing the first 2,000 alignment columns.'));
+}
+
+function dotPlotSvg(a, b, size) {
+  const step = Math.max(1, Math.floor(Math.max(a.length, b.length) / 180));
+  const plot = dotPlot(a, b, { window: 10, step, threshold: 0.7, maxPoints: 6000 });
+  const root = s('svg', { viewBox: `0 0 ${size} ${size}`, width: size, height: size, role: 'img', 'aria-label': 'Dot plot' });
+  root.append(s('rect', { x: 0, y: 0, width: size, height: size, fill: 'var(--paper)', stroke: 'var(--line)' }));
+  const sx = (p) => (p / Math.max(1, plot.width)) * size;
+  const sy = (p) => size - (p / Math.max(1, plot.height)) * size;
+  for (const [i, j, score] of plot.points) {
+    root.append(s('rect', { x: sx(i), y: sy(j), width: 1.4, height: 1.4, fill: score > 0.95 ? 'var(--accent)' : 'var(--muted)', opacity: 0.7 }));
+  }
+  if (plot.truncated) root.append(s('text', { x: 6, y: size - 6, 'font-size': 9, fill: 'var(--muted)' }, 'points capped'));
+  return root;
+}
+
+function alignmentText(r) {
+  const box = h('div', { class: 'mono', style: { fontSize: '11px', lineHeight: '1.35', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '260px', overflow: 'auto' } });
+  const limit = Math.min(r.alignedA.length, 2000);
+  const addRow = (text, other, side) => {
+    let run = { cls: 'match', text: '' };
+    const flush = () => { if (run.text) box.append(h('span', { style: { color: run.cls === 'match' ? 'var(--muted)' : run.cls === 'gap' ? 'var(--danger)' : 'var(--mismatch)' } }, run.text)); run = { cls: run.cls, text: '' }; };
+    for (let i = 0; i < limit; i++) {
+      const c = text[i];
+      const cls = c === '-' ? 'gap' : c === other[i] ? 'match' : 'mismatch';
+      if (cls !== run.cls) { flush(); run.cls = cls; }
+      run.text += c;
+    }
+    flush();
+    box.append('\n');
+  };
+  addRow(r.alignedA, r.alignedB, 'target');
+  addRow(r.alignedB, r.alignedA, 'query');
+  return box;
+}
+
+// ---- CRISPR ----------------------------------------------------------------
+
+function crisprPanel(el, { doc, state, api }) {
+  const current = state.crispr?.docId === doc.id ? state.crispr : null;
+  el.append(h('h3', {}, 'Find guides'));
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Enzyme / PAM'),
+    h('select', { id: 'crisprEnzyme' }, ['SpCas9', 'SaCas9', 'Cas12a', 'custom'].map((x) => h('option', { value: x, selected: (current?.enzyme ?? 'SpCas9') === x }, x)))));
+  el.append(h('div', { class: 'group' },
+    h('label', { class: 'field', style: { flex: '1 1 70px' } }, h('span', {}, 'Guide nt'),
+      h('input', { id: 'crisprLen', type: 'number', min: 10, max: 30, value: current?.guideLength ?? 20 })),
+    h('label', { class: 'field', style: { flex: '1 1 70px' } }, h('span', {}, 'Min GC'),
+      h('input', { id: 'crisprMinGc', type: 'number', min: 0, max: 100, value: current?.minGC ?? 20 })),
+    h('label', { class: 'field', style: { flex: '1 1 70px' } }, h('span', {}, 'Max GC'),
+      h('input', { id: 'crisprMaxGc', type: 'number', min: 0, max: 100, value: current?.maxGC ?? 80 }))));
+  el.append(h('div', { class: 'group' },
+    h('label', { class: 'sub', style: { display: 'flex', gap: '5px', alignItems: 'center' } },
+      h('input', { id: 'crisprOff', type: 'checkbox', checked: current?.offTargets ?? false }), 'Off-target scan (heuristic)'),
+    h('button', { class: 'btn primary', onclick: () => api.runCrispr({
+      enzyme: el.querySelector('#crisprEnzyme').value,
+      guideLength: Number(el.querySelector('#crisprLen').value) || 20,
+      minGC: Number(el.querySelector('#crisprMinGc').value),
+      maxGC: Number(el.querySelector('#crisprMaxGc').value),
+      offTargets: el.querySelector('#crisprOff').checked,
+    }) }, 'Find guides')));
+
+  if (!current) { el.append(h('p', { class: 'empty' }, 'No guide search yet.')); return; }
+  if (current.error) { el.append(h('p', { class: 'empty' }, current.error)); return; }
+  el.append(h('h3', {}, `${current.guides.length} guide(s)`));
+  if (current.guides.length) {
+    el.append(h('div', { class: 'group' },
+      h('button', { class: 'btn', onclick: () => api.addCrisprFeatures() }, 'Add guide features'),
+      h('button', { class: 'btn', onclick: () => api.setFeatureSelection([]) }, 'Clear selection')));
+  }
+  for (const g of current.guides.slice(0, 80)) {
+    const row = h('div', {
+      class: 'row', title: `${g.strand === 1 ? '+' : '−'} ${g.start + 1}–${g.end}, PAM ${g.pam}`,
+      onclick: () => api.setSelection({ start: g.start, end: g.end }),
+    },
+      h('span', { class: 'label mono', style: { fontSize: '12px' } }, `${g.strand === 1 ? '→' : '←'} ${g.sequence}`),
+      h('span', { class: 'meta' }, `${fmt(g.start + 1)} · ${g.gc.toFixed(0)}%`));
+    el.append(row);
+    el.append(h('div', { class: 'group', style: { margin: '0 0 6px 20px' } },
+      h('button', { class: 'btn', onclick: () => api.simulateNhej(g) }, 'NHEJ'),
+      h('button', { class: 'btn', onclick: () => {
+        const donor = window.prompt('HDR donor sequence (5′→3′):');
+        if (donor) api.simulateHdr(g, cleanSequence(donor));
+      } }, 'HDR…'),
+      h('button', { class: 'btn', onclick: () => api.crisprPrimers(g) }, 'Primers'),
+      g.offTargets ? h('span', { class: 'sub' }, `${g.offTargets.length} near-match(es)`) : null));
+  }
+  el.append(h('p', { class: 'sub' }, 'Off-target counts are a seed/mismatch heuristic, not a cleavage prediction.'));
+}
+
+// ---- Structure -------------------------------------------------------------
+
+function structurePanel(el, { doc, state, api }) {
+  const result = state.fold?.docId === doc.id ? state.fold : null;
+  const sel = state.selection;
+  el.append(h('h3', {}, 'RNA secondary structure'));
+  el.append(h('p', { class: 'sub' }, 'Bounded Turner subset: WC + G·U, stacking, hairpin and simple interior loops.'));
+  el.append(h('div', { class: 'group' },
+    h('label', { class: 'field', style: { flex: '1 1 90px' } }, h('span', {}, 'Max length'),
+      h('input', { id: 'foldMax', type: 'number', min: 20, max: 400, value: result?.maxLength ?? 250 })),
+    h('button', { class: 'btn primary', disabled: state.fold?.busy, onclick: () => api.runFold({
+      start: sel?.start ?? null, end: sel?.end ?? null,
+      maxLength: Number(el.querySelector('#foldMax').value) || 250,
+    }) }, state.fold?.busy ? 'Folding…' : (sel ? 'Fold selection' : 'Fold sequence'))));
+  if (!result) { el.append(h('p', { class: 'empty' }, 'No fold yet.')); return; }
+  if (result.busy) { el.append(h('p', { class: 'empty' }, 'Folding…')); return; }
+  if (result.error) { el.append(h('p', { class: 'empty' }, result.error)); return; }
+  const r = result.result;
+  el.append(h('p', { class: 'sub' }, `ΔG ${r.energy} kcal/mol · ${r.length} nt${result.worker ? ' · computed in a worker' : ''}`));
+  el.append(h('p', { class: 'mono', style: { fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, r.structure));
+  const svgBox = h('div', { style: { overflow: 'auto', border: '1px solid var(--line)', borderRadius: '7px', background: 'var(--paper)' } });
+  svgBox.innerHTML = structureToSvg(r.sequence, r.structure, { width: 640, perRow: 50, rowHeight: 110 });
+  el.append(svgBox);
+  el.append(h('div', { class: 'group', style: { marginTop: '8px' } },
+    h('button', { class: 'btn', onclick: () => api.exportStructure() }, 'Export SVG'),
+    h('button', { class: 'btn', onclick: () => api.copy(r.structure, 'structure characters') }, 'Copy dot-bracket')));
+}
+
 // ---- File -------------------------------------------------------------------
 
 // What else a .dna file carries, in the reader's terms rather than the format's.
@@ -371,6 +591,16 @@ function fileContents(el, doc) {
 
 function file(el, { doc, state, api }) {
   const L = doc.seq.length;
+  el.append(h('h3', {}, 'Save and projects'));
+  el.append(h('p', { class: 'sub' }, 'On a browser with the File System Access API this asks where to save; otherwise it downloads the file.'));
+  el.append(h('div', { class: 'group' },
+    h('button', { class: 'btn', onclick: () => api.save('dna') }, 'Save .dna'),
+    h('button', { class: 'btn', onclick: () => api.save('gb') }, 'Save GenBank'),
+    h('button', { class: 'btn', onclick: () => api.save('fasta') }, 'Save FASTA')));
+  el.append(h('div', { class: 'group', style: { marginTop: '6px' } },
+    h('button', { class: 'btn', onclick: () => api.saveProject() }, 'Save project…'),
+    h('button', { class: 'btn', onclick: () => api.openProject() }, 'Open project…')));
+  el.append(h('p', { class: 'sub' }, 'Projects keep every open document, its features, primers, cloning and assembly records, alignments and settings.'));
   el.append(h('label', { class: 'field' }, h('span', {}, 'Name'),
     h('input', { value: doc.name, onchange: (e) => api.edit('Rename', (d) => { d.name = e.target.value; }) })));
   el.append(h('label', { class: 'field' }, h('span', {}, 'Topology'),

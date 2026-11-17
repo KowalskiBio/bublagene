@@ -8,6 +8,7 @@ import { showMenu, closeMenu } from './menu.js';
 import { saveSession, loadSession, clearSession, timeAgo } from './session.js';
 import { readAlignments } from '../formats/bam.js';
 import { readTraces } from '../formats/ztr.js';
+import { traceBaseToReference } from '../traces.js';
 import { traceView } from './traceview.js';
 import { History } from '../undo.js';
 import { PANELS, renderPanel } from './panels.js';
@@ -18,6 +19,14 @@ import { newDocument, cloneDoc, replaceRange, rotateOrigin, reverseComplementDoc
 import { findSites, ENZYME_BY_NAME, COMMON_SET } from '../enzymes.js';
 import { findBindingSites } from '../primers.js';
 import { gcContent, meltingTemp, revcomp, subseq, rangeLength, cleanSequence, translate } from '../seq.js';
+import { alignPair } from '../align.js';
+import { callVariants, variantsToFeatures } from '../variants.js';
+import { findGuides, guidesToFeatures, nhejEdit, hdrEdit, editPrimers } from '../crispr.js';
+import { fold, structureToSvg } from '../fold.js';
+import { extractFragment, pasteFragment, reorderFeature } from '../fragment.js';
+import { offload } from '../compute.js';
+import { saveDocument, openDocument, supportsFileSystemAccess, writeAutosave, readAutosave } from '../storage.js';
+import { projectToJSON, projectFromJSON } from '../project.js';
 
 const state = {
   docs: [],
@@ -32,10 +41,21 @@ const state = {
   agarose: 1,
   ladder: '1 kb ladder',
   showTranslation: true,
+  showSixFrame: false,
   showComplement: true,
   featureFilter: '',
   showReads: true,
   trace: 0,
+  traceBase: null,
+  selectedFeatures: new Set(),
+  alignTarget: null,
+  alignLocal: false,
+  alignBand: 0,
+  alignBusy: false,
+  alignResult: null,
+  crispr: null,
+  fold: null,
+  clipboard: null,
   pxPerBase: 14,
   restorable: null, // a saved session found on startup, until the user answers
 };
@@ -45,6 +65,8 @@ const undo = new Map(); // doc id -> {past: [], future: []}
 // document, so they are never written to the session or saved back.
 const alignments = new Map(); // doc id -> reads
 const traces = new Map();     // doc id -> chromatograms
+const traceMaps = new Map();   // doc id -> { key, map }
+let activeTraceView = null;
 
 const readsFor = (doc) => (doc && state.showReads ? alignments.get(doc.id) ?? [] : []);
 
@@ -79,7 +101,7 @@ function rememberSoon() {
 function remember() {
   clearTimeout(saveTimer);
   if (!state.docs.length) { clearSession(); return; }
-  saveSession({
+  const payload = {
     savedAt: new Date().toISOString(),
     active: state.active,
     view: state.view,
@@ -91,11 +113,21 @@ function remember() {
     agarose: state.agarose,
     ladder: state.ladder,
     showTranslation: state.showTranslation,
+    showSixFrame: state.showSixFrame,
     showComplement: state.showComplement,
     featureFilter: state.featureFilter,
     // the undo history is deliberately left behind; only the documents return
     docs: state.docs.map((d) => ({ ...cloneDoc(d), restoredDirty: isDirty(d) })),
-  });
+  };
+  saveSession(payload);
+  // A small JSON mirror for recovery when IndexedDB is unavailable or wedged.
+  try {
+    const backup = {
+      ...payload,
+      docs: payload.docs.map((d) => ({ ...d, source: { format: 'backup' } })),
+    };
+    writeAutosave('bublagene.backup', JSON.stringify(backup));
+  } catch { /* storage full or unavailable */ }
 }
 
 function restoreSession(saved) {
@@ -111,6 +143,7 @@ function restoreSession(saved) {
   state.agarose = saved.agarose ?? 1;
   state.ladder = saved.ladder ?? '1 kb ladder';
   state.showTranslation = saved.showTranslation ?? true;
+  state.showSixFrame = saved.showSixFrame ?? false;
   state.showComplement = saved.showComplement ?? true;
   state.featureFilter = saved.featureFilter ?? '';
   state.restorable = null;
@@ -136,6 +169,8 @@ function openDoc(doc) {
   undo.set(doc.id, new History());
   state.selection = null;
   state.highlight = null;
+  state.selectedFeatures = new Set();
+  state.traceBase = null;
   state.digestWith = [];
   state.shownEnzymes = new Set();
   autoShowEnzymes(doc);
@@ -169,6 +204,9 @@ function edit(label, mutate) {
   const stack = undo.get(doc.id);
   stack.record(cloneDoc(doc), label, { coalesceKey: label });
   mutate(doc);
+  state.alignResult = null;
+  state.fold = null;
+  state.crispr = null;
   addHistory(doc, 'edit', label);
   render();
 }
@@ -182,21 +220,36 @@ function undoOnce(redo = false) {
   state.docs[state.active] = prev;
   undo.set(prev.id, stack);
   state.selection = null;
+  state.selectedFeatures = new Set();
   render();
 }
 
 // ---- files ------------------------------------------------------------------
+
+async function readFileData(file) {
+  if (file.data) return file.data instanceof Uint8Array ? file.data : new Uint8Array(file.data);
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+async function readFileText(file) {
+  if (file.text) return file.text();
+  return new TextDecoder().decode(await readFileData(file));
+}
 
 async function openFiles(files) {
   for (const file of files) {
     try {
       const lower = file.name.toLowerCase();
       if (lower.endsWith('.dna')) {
-        const doc = readDna(new Uint8Array(await file.arrayBuffer()), file.name);
+        const doc = readDna(await readFileData(file), file.name);
         openDoc(doc);
         for (const w of doc.source.warnings ?? []) toast(w);
+      } else if (lower.endsWith('.json')) {
+        const project = projectFromJSON(await readFileText(file));
+        for (const d of project.docs) openDoc(d);
+        if (project.warnings.length) toast(project.warnings[0]);
       } else {
-        const text = await file.text();
+        const text = await readFileText(file);
         const docs = /^LOCUS/m.test(text) ? readGenBank(text, file.name)
           : text.trimStart().startsWith('>') ? readFasta(text, file.name)
             : readFasta(`>${file.name}\n${text}`, file.name);
@@ -208,28 +261,74 @@ async function openFiles(files) {
   }
 }
 
-function save(kind) {
+async function save(kind) {
   const doc = current();
   if (!doc) return;
   let data;
   let name = doc.name.replace(/[^\w.-]+/g, '_');
+  let types;
   if (kind === 'dna') {
-    data = new Blob([writeDna(doc, { bindingSitesFor: (p) => findBindingSites(doc.seq, doc.circular, p.seq) })], { type: 'application/octet-stream' });
+    data = writeDna(doc, { bindingSitesFor: (p) => findBindingSites(doc.seq, doc.circular, p.seq) });
     name += '.dna';
+    types = [{ description: 'BublaGene sequence', accept: { 'application/octet-stream': ['.dna'] } }];
   } else if (kind === 'gb') {
-    data = new Blob([writeGenBank(doc)], { type: 'chemical/seq-na-genbank' });
+    data = writeGenBank(doc);
     name += '.gb';
+    types = [{ description: 'GenBank', accept: { 'chemical/seq-na-genbank': ['.gb', '.gbk'] } }];
   } else {
-    data = new Blob([writeFasta(doc)], { type: 'text/plain' });
+    data = writeFasta(doc);
     name += '.fasta';
+    types = [{ description: 'FASTA', accept: { 'text/plain': ['.fasta', '.fa'] } }];
   }
-  const url = URL.createObjectURL(data);
-  const a = h('a', { href: url, download: name });
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-  toast(`Saved ${name}`);
+  try {
+    const result = await saveDocument({ data, name, types });
+    toast(result.method === 'download' ? `Saved ${result.name}` : `${result.name} saved`);
+  } catch (e) {
+    toast(`Could not save: ${e.message}`, 'error');
+  }
+}
+
+async function saveProject() {
+  if (!state.docs.length) return;
+  const json = projectToJSON(state.docs, {
+    active: state.active,
+    settings: {
+      view: state.view, panel: state.panel, enzymeSet: state.enzymeSet,
+      shownEnzymes: [...state.shownEnzymes], digestWith: state.digestWith,
+      agarose: state.agarose, ladder: state.ladder,
+      showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
+      featureFilter: state.featureFilter,
+    },
+    alignments: new Map([...alignments.entries()].filter(([, reads]) => reads).map(([id, reads]) => [id, reads.map((r) => ({ ...r, insertions: r.insertions instanceof Map ? [...r.insertions.entries()] : (r.insertions ?? []) }))])),
+  });
+  try {
+    const result = await saveDocument({ data: json, name: 'project.json', types: [{ description: 'BublaGene project', accept: { 'application/json': ['.json'] } }] });
+    toast(result.method === 'download' ? 'Project downloaded' : 'Project saved');
+  } catch (e) { toast(`Could not save the project: ${e.message}`, 'error'); }
+}
+
+async function openProject() {
+  try {
+    const file = await openDocument({ types: [{ description: 'BublaGene project', accept: { 'application/json': ['.json'] } }] });
+    if (!file) return;
+    const project = projectFromJSON(new TextDecoder().decode(file.data));
+    for (const entry of project.alignments ?? []) {
+      alignments.set(entry.docId, (entry.reads ?? []).map((r) => ({ ...r, insertions: r.insertions instanceof Map ? r.insertions : new Map(r.insertions ?? []) })));
+    }
+    for (const d of project.docs) openDoc(d);
+    const s = project.settings ?? {};
+    state.view = s.view ?? state.view;
+    state.panel = s.panel ?? state.panel;
+    state.enzymeSet = s.enzymeSet ?? state.enzymeSet;
+    state.shownEnzymes = new Set(s.shownEnzymes ?? state.shownEnzymes);
+    state.digestWith = s.digestWith ?? state.digestWith;
+    state.showTranslation = s.showTranslation ?? state.showTranslation;
+    state.showSixFrame = s.showSixFrame ?? state.showSixFrame;
+    state.showComplement = s.showComplement ?? state.showComplement;
+    for (const w of project.warnings) toast(w);
+    toast(`Opened ${project.docs.length} document(s)`);
+    render();
+  } catch (e) { toast(`Could not open the project: ${e.message}`, 'error'); }
 }
 
 // ---- api handed to the panels ------------------------------------------------
@@ -262,6 +361,150 @@ const api = {
   primerFromSelection(dir) { addPrimerFromSelection(dir); },
   selectedSequence() { return selectedSeq(); },
   copy(text, what) { copy(text, what); },
+  featureSequence(f) { const doc = current(); return doc ? featureSequence(doc, f) : ''; },
+  toggleFeatureSelected(id) {
+    state.selectedFeatures.has(id) ? state.selectedFeatures.delete(id) : state.selectedFeatures.add(id);
+    render();
+  },
+  setFeatureSelection(ids) { state.selectedFeatures = new Set(ids); render(); },
+  deleteSelectedFeatures() {
+    const doc = current();
+    if (!doc || !state.selectedFeatures.size) return;
+    const ids = new Set(state.selectedFeatures);
+    edit('Delete selected features', (d) => { d.features = d.features.filter((f) => !ids.has(f.id)); });
+    state.selectedFeatures = new Set();
+    render();
+  },
+  copySelectedFeatures() {
+    const doc = current();
+    if (!doc) return;
+    const picked = doc.features.filter((f) => state.selectedFeatures.has(f.id));
+    copy(picked.map((f) => `>${f.name}\n${featureSequence(doc, f)}`).join('\n'), 'feature sequences');
+  },
+  reorderFeature(id, beforeId) { edit('Reorder features', (d) => reorderFeature(d, id, beforeId)); },
+  copyFragment() {
+    const doc = current();
+    if (!doc || !state.selection) return;
+    state.clipboard = extractFragment(doc, state.selection);
+    if (state.clipboard) toast(`Copied ${fmt(state.clipboard.seq.length)} bp with ${state.clipboard.features.length} feature(s)`);
+  },
+  pasteFragment() {
+    const doc = current();
+    if (!doc || !state.clipboard) return;
+    const at = state.selection?.start ?? 0;
+    edit('Paste fragment', (d) => pasteFragment(d, at, state.clipboard));
+    toast(`Pasted ${fmt(state.clipboard.seq.length)} bp`);
+  },
+  setAlignTarget(id) { state.alignTarget = id; state.alignResult = null; render(); },
+  setAlignLocal(v) { state.alignLocal = v; render(); },
+  setAlignBand(v) { state.alignBand = v; render(); },
+  runAlignment() {
+    const doc = current();
+    const others = state.docs.filter((d) => d.id !== doc?.id);
+    const target = others.find((d) => d.id === state.alignTarget) ?? others[0];
+    if (!doc || !target) return;
+    state.alignBusy = true;
+    render();
+    setTimeout(() => {
+      try {
+        const result = alignPair(doc.seq, target.seq, { local: state.alignLocal, band: state.alignBand > 0 ? state.alignBand : null });
+        state.alignResult = { docId: doc.id, targetId: target.id, result };
+      } catch (e) {
+        state.alignResult = { docId: doc.id, targetId: target.id, error: e.message };
+      }
+      state.alignBusy = false;
+      render();
+    }, 10);
+  },
+  alignmentVariants() {
+    const doc = current();
+    const result = state.alignResult;
+    const target = state.docs.find((d) => d.id === result?.targetId);
+    if (!doc || !target) return;
+    const calls = callVariants(target.seq, doc.seq);
+    edit('Add variant features', (d) => { d.features.push(...variantsToFeatures(d, calls.variants)); });
+    toast(`${calls.variants.length} variant(s) added as features`);
+  },
+  runCrispr(opts) {
+    const doc = current();
+    if (!doc) return;
+    try {
+      const guides = findGuides(doc.seq, {
+        enzyme: opts.enzyme, guideLength: opts.guideLength, minGC: opts.minGC, maxGC: opts.maxGC,
+        circular: doc.circular, maxOffTargets: opts.offTargets ? 3 : null,
+      });
+      state.crispr = { docId: doc.id, ...opts, guides, error: null };
+    } catch (e) {
+      state.crispr = { docId: doc.id, ...opts, guides: [], error: e.message };
+    }
+    render();
+  },
+  addCrisprFeatures() {
+    const doc = current();
+    const guides = state.crispr?.docId === doc?.id ? state.crispr.guides : [];
+    if (!guides.length) return;
+    edit('Add CRISPR guide features', (d) => { d.features.push(...guidesToFeatures(d, guides)); });
+  },
+  simulateNhej(guide) {
+    const doc = current();
+    if (!doc) return;
+    const result = nhejEdit(doc, guide, { seed: 1 });
+    openDoc(result.doc);
+    toast(`NHEJ: deleted ${result.change.deleted.length} bp`);
+  },
+  simulateHdr(guide, donor) {
+    const doc = current();
+    if (!doc) return;
+    const result = hdrEdit(doc, guide, { donor });
+    openDoc(result.doc);
+    toast(`HDR: inserted ${donor.length} bp`);
+  },
+  crisprPrimers(guide) {
+    const doc = current();
+    if (!doc) return;
+    try {
+      const primers = editPrimers(doc, guide.cut, { arm: 40 });
+      edit('Add edit primers', (d) => {
+        d.primers.push({ id: newId(), name: 'edit forward', seq: primers.forward.sequence, description: `Flanks CRISPR cut at ${guide.cut + 1}`, extra: {} });
+        d.primers.push({ id: newId(), name: 'edit reverse', seq: primers.reverse.sequence, description: `Flanks CRISPR cut at ${guide.cut + 1}`, extra: {} });
+      });
+      state.panel = 'Primers';
+      render();
+    } catch (e) { toast(e.message, 'error'); }
+  },
+  async runFold({ start, end, maxLength }) {
+    const doc = current();
+    if (!doc) return;
+    const seq = start != null && end != null ? subseq(doc.seq, start, end, doc.circular) : doc.seq;
+    state.fold = { docId: doc.id, busy: true, maxLength };
+    render();
+    try {
+      if (!seq.length) throw new Error('Nothing to fold');
+      const { result, worker } = await offload(
+        ({ sequence, limit }) => fold(sequence, { maxLength: limit }),
+        { sequence: seq, limit: maxLength },
+        { workerUrl: new URL('../workers/compute-worker.js', import.meta.url) },
+      );
+      if (result?.__error) throw new Error(result.__error);
+      state.fold = { docId: doc.id, result, worker, maxLength, busy: false };
+    } catch (e) {
+      state.fold = { docId: doc.id, error: e.message, busy: false, maxLength };
+    }
+    render();
+  },
+  exportStructure() {
+    const result = state.fold?.result;
+    if (!result) return;
+    const svg = structureToSvg(result.sequence, result.structure, { width: 900, perRow: 60 });
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: 'structure.svg' });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  },
+  save(kind) { save(kind); },
+  saveProject,
+  openProject,
 };
 
 // ---- rendering ---------------------------------------------------------------
@@ -279,7 +522,7 @@ function renderTabs() {
   const box = clear(el('tabs'));
   state.docs.forEach((doc, i) => {
     const dirty = isDirty(doc);
-    box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.highlight = null; render(); } },
+    box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.highlight = null; state.selectedFeatures = new Set(); state.traceBase = null; render(); } },
       h('span', { class: 'name' }, doc.name),
       dirty ? h('span', { class: 'dirty', title: 'edited' }, '•') : null,
       h('button', { class: 'close', title: 'Close', onclick: (e) => { e.stopPropagation(); closeDoc(i); } }, '×')));
@@ -290,7 +533,7 @@ function renderViewBar(doc) {
   const opts = clear(el('viewOpts'));
   const ops = clear(el('editOps'));
   if (!doc) return;
-  const toggles = [['showComplement', 'Both strands'], ['showTranslation', 'Translation']];
+  const toggles = [['showComplement', 'Both strands'], ['showTranslation', 'Translation'], ['showSixFrame', 'Six frames']];
   if (alignments.get(doc.id)?.length) toggles.push(['showReads', `Reads (${alignments.get(doc.id).length})`]);
   for (const [key, label] of toggles) {
     opts.append(h('label', { class: 'sub', style: { display: 'flex', gap: '4px', alignItems: 'center' } },
@@ -430,6 +673,8 @@ function openContextMenu(ev) {
     label: 'Copy as FASTA', disabled: !picked,
     onClick: () => copy(`>${doc.name} ${sel.start + 1}-${sel.end}\n${picked.match(/.{1,70}/g).join('\n')}\n`),
   });
+  items.push({ label: 'Copy fragment with features', disabled: !sel, onClick: () => api.copyFragment() });
+  items.push({ label: 'Paste fragment here', disabled: !state.clipboard, onClick: () => api.pasteFragment() });
   items.push('-');
   items.push({ label: 'Make a forward primer', disabled: !picked, onClick: () => addPrimerFromSelection(1) });
   items.push({ label: 'Make a reverse primer', disabled: !picked, onClick: () => addPrimerFromSelection(-1) });
@@ -455,6 +700,7 @@ function renderView(doc) {
   // keep the reader where they were: rebuilding the view resets its scroll
   const wasScrolled = state.view === 'seq' ? el('view').scrollTop : 0;
   const view = clear(el('view'));
+  activeTraceView = null;
   if (!doc) { view.append(welcome()); return; }
   const sites = shownSites(doc);
   const opts = {
@@ -467,13 +713,50 @@ function renderView(doc) {
     const tv = traceView(found, {
       selected: Math.min(state.trace, found.length - 1),
       pxPerBase: state.pxPerBase,
-      onSelect: (i) => { state.trace = i; render(); },
+      onSelect: (i) => { state.trace = i; state.traceBase = null; render(); },
       onZoom: (px) => { state.pxPerBase = px; render(); },
+      highlightBase: state.traceBase,
       onPickBase: (k, trace) => {
-        const base = trace.bases[k];
-        toast(`Base ${k + 1} of ${trace.name || 'the trace'}: ${base}${trace.confidence ? ` (quality ${trace.confidence[k] ?? '?'})` : ''}`);
+        state.traceBase = k;
+        const doc2 = current();
+        if (doc2) {
+          if (doc2.seq.length * trace.bases.length > 2_000_000) {
+            toast('This trace is too large to map onto the reference automatically', 'error');
+            return;
+          }
+          const key = `${doc2.id}:${trace.name ?? ''}:${trace.bases.length}`;
+          let cached = traceMaps.get(doc2.id);
+          if (!cached || cached.key !== key) {
+            try {
+              cached = { key, helper: traceBaseToReference(doc2.seq, trace, k) };
+              traceMaps.set(doc2.id, cached);
+            } catch (e) {
+              toast(`Could not map the trace: ${e.message}`, 'error');
+              return;
+            }
+          }
+          const position = cached.helper.map[k];
+          if (position != null) state.selection = { start: position, end: position + 1 };
+          toast(`Trace base ${k + 1}: ${trace.bases[k]}${position != null ? ` → reference ${position + 1}` : ''}${trace.confidence ? ` · quality ${trace.confidence[k] ?? '?'}` : ''}`);
+        }
+        activeTraceView?.setHighlight?.(k);
+        renderStatus(current());
+        renderPanels(current());
+      },
+      onLocate: (k, trace) => {
+        const doc2 = current();
+        if (!doc2) return;
+        if (doc2.seq.length * trace.bases.length > 2_000_000) { toast('This trace is too large to map onto the reference automatically', 'error'); return; }
+        let position;
+        try { position = traceBaseToReference(doc2.seq, trace, k).map[k]; } catch (e) { toast(`Could not map the trace: ${e.message}`, 'error'); return; }
+        if (position == null) { toast('This trace base has no reference position', 'error'); return; }
+        state.selection = { start: position, end: position + 1 };
+        state.view = 'seq';
+        render();
+        toast(`Showing reference base ${position + 1}`);
       },
     });
+    activeTraceView = tv;
     view.append(tv);
     addEventListener('resize', () => tv.refresh?.(), { once: true });
     return;
@@ -493,7 +776,7 @@ function renderView(doc) {
         renderStatus(doc);
         if (!info?.live) render();
       },
-      showTranslation: state.showTranslation, showComplement: state.showComplement,
+      showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
       reads: readsFor(doc),
     });
     view.append(sv);
@@ -514,7 +797,7 @@ function renderPanels(doc) {
   }
   const panel = clear(el('panel'));
   if (!doc) { panel.append(h('p', { class: 'empty' }, 'Open a file to see its details.')); return; }
-  panel.append(renderPanel(state.panel, { doc, state, api }));
+  panel.append(renderPanel(state.panel, { doc, state, api, others: state.docs.filter((d) => d.id !== doc.id) }));
 }
 
 function welcome() {
@@ -584,7 +867,19 @@ function render() {
 
 // ---- events -------------------------------------------------------------------
 
-el('openBtn').addEventListener('click', () => el('fileInput').click());
+el('openBtn').addEventListener('click', async () => {
+  if (supportsFileSystemAccess()) {
+    try {
+      const files = await openDocument({ multiple: true });
+      if (files?.length) await openFiles(files);
+      return;
+    } catch (e) {
+      if (e?.name !== 'AbortError') toast(`Could not open: ${e.message}`, 'error');
+      return;
+    }
+  }
+  el('fileInput').click();
+});
 el('fileInput').addEventListener('change', (e) => { openFiles([...e.target.files]); e.target.value = ''; });
 el('newBtn').addEventListener('click', () => openDoc(newDocument({ name: 'Untitled', seq: '', circular: true })));
 el('saveAs').addEventListener('change', (e) => { if (e.target.value) save(e.target.value); e.target.value = ''; });
@@ -648,9 +943,19 @@ try {
 render();
 
 // offer the previous session once storage answers
-loadSession().then((saved) => {
+loadSession().then(async (saved) => {
   if (saved?.docs?.length && !state.docs.length) {
     state.restorable = saved;
     render();
+    return;
   }
+  const backup = await readAutosave('bublagene.backup');
+  if (!backup || state.docs.length) return;
+  try {
+    const parsed = JSON.parse(backup);
+    if (parsed?.docs?.length) {
+      state.restorable = { ...parsed, restoredFromBackup: true };
+      render();
+    }
+  } catch { /* ignore a corrupt backup */ }
 });

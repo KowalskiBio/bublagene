@@ -13,6 +13,7 @@ const RULER_ROW = 18;   // room below for the numbers
 
 export function traceView(traces, opts = {}) {
   const { selected = 0, onSelect, pxPerBase = 14, onZoom, highlightBase = null } = opts;
+  let highlight = highlightBase;
   const wrap = h('div', { class: 'tracewrap' });
   const trace = traces[selected];
 
@@ -28,6 +29,7 @@ export function traceView(traces, opts = {}) {
     bar.append(h('span', { class: 'sub' }, trace?.error ? '' : `${fmt(trace?.bases.length ?? 0)} bases · ${fmt(trace?.sampleCount ?? 0)} samples`));
     bar.append(h('button', { class: 'btn icon', title: 'Narrower', onclick: () => onZoom?.(Math.max(4, pxPerBase - 4)) }, '−'));
     bar.append(h('button', { class: 'btn icon', title: 'Wider', onclick: () => onZoom?.(Math.min(60, pxPerBase + 4)) }, '+'));
+    if (opts.onLocate) bar.append(h('button', { class: 'btn', onclick: () => opts.onLocate(highlight ?? 0, trace) }, 'Show in sequence'));
     wrap.append(bar);
   }
 
@@ -113,7 +115,7 @@ export function traceView(traces, opts = {}) {
       const px = x(p);
       if (px < -20 || px > w + 20) continue;
       const base = trace.bases[k] ?? 'N';
-      if (highlightBase === k) {
+      if (highlight === k) {
         ctx.fillStyle = accent;
         ctx.fillRect(px - pxPerBase / 2, 2, pxPerBase, BASE_ROW - 4);
         ctx.fillStyle = css.getPropertyValue('--surface').trim() || '#fff';
@@ -146,6 +148,7 @@ export function traceView(traces, opts = {}) {
   };
   scroller.addEventListener('scroll', schedule);
   wrap.refresh = schedule;
+  wrap.setHighlight = (k) => { highlight = k; schedule(); };
 
   // tell the caller which base was clicked
   scroller.addEventListener('click', (ev) => {

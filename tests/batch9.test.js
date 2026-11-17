@@ -123,3 +123,21 @@ test('heavy work can be offloaded or run locally with the same result', async ()
   const direct = await runInWorker(new FakeWorker(), 3);
   assert.deepEqual(direct, { result: 9, worker: true });
 });
+
+test('fragments copy and paste with their features', async () => {
+  const { extractFragment, pasteFragment, reorderFeature } = await import('../js/fragment.js');
+  const doc = newDocument({ seq: 'AAAACCCCGGGG' });
+  doc.features = [
+    { id: 'f1', name: 'first', type: 'misc_feature', strand: 1, color: '#888', segments: [{ start: 0, end: 4 }], qualifiers: [], extra: {} },
+    { id: 'f2', name: 'second', type: 'misc_feature', strand: 1, color: '#888', segments: [{ start: 4, end: 8 }], qualifiers: [], extra: {} },
+  ];
+  const fragment = extractFragment(doc, { start: 0, end: 4 });
+  assert.equal(fragment.seq, 'AAAA');
+  assert.equal(fragment.features.length, 1);
+  assert.equal(pasteFragment(doc, 12, fragment).position, 12);
+  assert.equal(doc.seq, 'AAAACCCCGGGGAAAA');
+  assert.equal(doc.features.length, 3);
+  assert.deepEqual(doc.features[2].segments[0], { start: 12, end: 16 });
+  assert.equal(reorderFeature(doc, 'f2', 'f1'), true);
+  assert.deepEqual(doc.features.slice(0, 2).map((f) => f.id), ['f2', 'f1']);
+});

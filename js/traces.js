@@ -8,6 +8,7 @@ import { readAB1 } from './formats/ab1.js';
 import { readSCF } from './formats/scf.js';
 import { readZtr } from './formats/ztr.js';
 import { newDocument, newId } from './model.js';
+import { alignGlobal } from './align.js';
 
 const ZTR_MAGIC = [0xae, 0x5a, 0x54, 0x52, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -156,4 +157,28 @@ export function baseAtSample(trace, sample) {
     if (d < distance) { distance = d; best = i; }
   }
   return { index: best, base: trace.bases[best], position: positions[best], distance };
+}
+
+// Map each called base in a trace to its position in a reference sequence,
+// using a global alignment of the trace bases to the reference. Insertions in
+// the trace are anchored to the reference base they follow.
+export function traceReferenceMap(reference, trace, { band = null, alignment = null } = {}) {
+  const aln = alignment ?? alignGlobal(reference, trace.bases, { band });
+  const map = new Array(trace.bases.length).fill(null);
+  let ref = aln.startA;
+  let q = 0;
+  for (let i = 0; i < aln.alignedA.length; i++) {
+    const a = aln.alignedA[i];
+    const b = aln.alignedB[i];
+    if (a !== '-' && b !== '-') { map[q] = ref; ref++; q++; }
+    else if (a !== '-' && b === '-') { ref++; }
+    else if (a === '-' && b !== '-') { map[q] = ref; q++; }
+  }
+  return { map, alignment: aln };
+}
+
+export function traceBaseToReference(reference, trace, index, options) {
+  const { map, alignment } = traceReferenceMap(reference, trace, options);
+  const position = map[index];
+  return { position, base: trace.bases[index], referenceBase: position == null ? null : reference[position] ?? null, alignment };
 }

@@ -2,7 +2,7 @@
 // Only the lines in view are built, so a 35 kb sequence stays responsive.
 
 import { h, clear, fmt } from './dom.js';
-import { complement, translate, mod, rangeLength } from '../seq.js';
+import { complement, translate, revcomp, mod, rangeLength } from '../seq.js';
 import { codingSequence, frameOffset, isCodingSegment, featureSpan } from '../model.js';
 
 const NUM_W = 62;      // gutter for position numbers
@@ -13,7 +13,7 @@ const LABEL_CH = 5.75; // width of one character at the 10px label size
 const labelWidth = (text) => text.length * LABEL_CH + 8;
 
 export function sequenceView(doc, opts = {}) {
-  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showComplement = true, sites = [], highlight, reads = [] } = opts;
+  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showSixFrame = false, showComplement = true, sites = [], highlight, reads = [] } = opts;
   const L = doc.seq.length;
   // The view owns the selection while the pointer is down, so that dragging
   // never has to rebuild this element (which would drop the pointer capture).
@@ -187,6 +187,33 @@ export function sequenceView(doc, opts = {}) {
       }
     }
 
+    // six-frame translation track: top frames are codon-aligned; the three
+    // reverse frames are shown as a compact block so they stay readable.
+    if (showSixFrame) {
+      for (let f = 1; f <= 3; f++) {
+        const start = Math.max(0, from - mod(from - (f - 1), 3));
+        const protein = translate(doc.seq.slice(start, Math.min(L, to + 3)));
+        if (!protein) continue;
+        line.append(h('div', {
+          class: 'aa', style: { left: `${NUM_W + (start - from) * charW}px`, top: `${y}px`, opacity: .85 },
+          title: `frame +${f}`,
+        }, `+${f} ${[...protein].join('  ')}`));
+        y += 13;
+      }
+      const rc = revcomp(doc.seq);
+      for (let f = 1; f <= 3; f++) {
+        const rFrom = L - to;
+        const start = Math.max(0, rFrom - mod(rFrom - (f - 1), 3));
+        const protein = translate(rc.slice(start, Math.min(L, rFrom + (to - from) + 3)));
+        if (!protein) continue;
+        line.append(h('div', {
+          class: 'aa', style: { left: `${NUM_W}px`, top: `${y}px`, opacity: .7 },
+          title: `frame −${f}`,
+        }, `−${f} ${[...protein].join('  ')}`));
+        y += 13;
+      }
+    }
+
     // feature bars; a name too wide for its bar is printed beside it instead of
     // being clipped
     const lineWidth = NUM_W + state.perLine * charW;
@@ -264,7 +291,7 @@ export function sequenceView(doc, opts = {}) {
       maxReads = Math.max(maxReads, n);
     }
     const strands = 1 + (showComplement ? 1 : 0);
-    return Math.round((sites.length ? state.siteRows * 12 + 2 : 0) + strands * 17 + maxReads * 15 + maxAA * 14 + maxBars * 15 + 10);
+    return Math.round((sites.length ? state.siteRows * 12 + 2 : 0) + strands * 17 + maxReads * 15 + maxAA * 14 + (showSixFrame ? 6 * 13 : 0) + maxBars * 15 + 10);
   }
 
   function layout() {

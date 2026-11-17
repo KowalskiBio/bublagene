@@ -29,8 +29,11 @@ from the built-in example.
   out. The BAM reader is checked field by field against samtools. Trace
   chromatograms are decoded too and drawn as the four dye curves with the called
   bases above them.
-- **Panels** — features (add, edit, delete, ORFs), primers (binding sites, pair
-  design, PCR), enzymes, digest with a simulated gel, and file details.
+- **Panels** — features (add, edit, delete, ORFs, multi-select, qualifier
+  editing, drag-to-reorder), primers (binding sites, pair design, PCR), enzymes,
+  digest with a simulated gel, alignment (dot plot, mismatch/indel colouring),
+  CRISPR (guides, heuristic off-targets, NHEJ/HDR, edit primers), RNA structure
+  (bounded MFE with SVG export), and file details with project save/open.
 - **Cloning** — cut a vector and an insert with the same enzymes, check that the
   ends actually ligate (and whether the insert also fits backwards), and join
   them into a new construct carrying features from both pieces. Gibson assembly
@@ -49,7 +52,12 @@ from the built-in example.
   map and SVG/PNG/PDF diagrams; project archives keep sequences, features,
   primers, cloning/assembly records, alignments and settings with stable IDs.
   Native records carry schema versions and older ones migrate forward on read.
-- **Editing that stays reversible.** A coalescing undo/redo history, feature
+- **Editing that stays reversible.** Features can be multi-selected, reordered
+  by drag, and copied with their annotations; fragments paste across documents.
+  Undo groups bursts of typing; autosave keeps an IndexedDB session plus a
+  small recovery mirror. Browser save/open uses the File System Access API
+  with OPFS and download fallbacks, and projects keep every open document.
+ A coalescing undo/redo history, feature
   filtering by name/type/qualifier, six-frame translation, and search across
   sequence and annotations. Browser save/open prefers the File System Access
   API and falls back to OPFS or a download; autosave snapshots are debounced
@@ -65,6 +73,9 @@ from the built-in example.
   seed/mismatch heuristic, not a cleavage prediction. NHEJ and HDR edits are
   deterministic for a seed and report frame effects; `crispr_site` features and
   flanking primers are produced directly.
+- **Chromatograms, synchronised.** Clicking a trace base maps it to the reference
+  through an alignment; "Show in sequence" jumps to that base. A six-frame
+  translation track and live ORF list run alongside the sequence.
 - **Chromatograms.** ABI (`.ab1`) and SCF traces are decoded into four dye
   channels, called bases, peak positions and Phred qualities (ZTR was already
   supported). Mott or Phred trimming returns base coordinates, can add trim

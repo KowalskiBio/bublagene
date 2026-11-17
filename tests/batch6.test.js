@@ -164,3 +164,14 @@ test('trim features, documents, slices and base navigation', () => {
   assert.equal(hit.base, 'G');
   assert.ok(hit.distance <= 3);
 });
+
+test('trace bases map to reference coordinates through an alignment', async () => {
+  const { traceBaseToReference } = await import('../js/traces.js');
+  const trace = { bases: 'ACGTTAC' };
+  const ref = 'ACGTTTAC';
+  const hit = traceBaseToReference(ref, trace, 4);
+  assert.ok(hit.position != null);
+  assert.equal(ref[hit.position], 'T');
+  const insertion = traceBaseToReference('ACGTAC', { bases: 'ACGGTAC' }, 3);
+  assert.ok(insertion.position != null);
+});
