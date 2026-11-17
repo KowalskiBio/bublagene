@@ -57,6 +57,15 @@ const state = {
   fold: null,
   clipboard: null,
   pxPerBase: 14,
+  cloning: {
+    mode: 'restriction',
+    vector: { docId: null, enzymes: [], fragment: null },
+    insert: { docId: null, enzymes: [], fragment: null },
+    circular: true,
+    orientation: 'auto',
+    gibson: [],
+    minOverlap: 20,
+  },
   restorable: null, // a saved session found on startup, until the user answers
 };
 
@@ -359,6 +368,7 @@ const api = {
   setAgarose(v) { state.agarose = v; render(); },
   setLadder(v) { state.ladder = v; render(); },
   primerFromSelection(dir) { addPrimerFromSelection(dir); },
+  setCloning(patch) { state.cloning = { ...state.cloning, ...patch }; render(); },
   selectedSequence() { return selectedSeq(); },
   copy(text, what) { copy(text, what); },
   featureSequence(f) { const doc = current(); return doc ? featureSequence(doc, f) : ''; },
@@ -801,7 +811,11 @@ function renderPanels(doc) {
   }
   const panel = clear(el('panel'));
   if (!doc) { panel.append(h('p', { class: 'empty' }, 'Open a file to see its details.')); return; }
-  panel.append(renderPanel(state.panel, { doc, state, api, others: state.docs.filter((d) => d.id !== doc.id) }));
+  panel.append(renderPanel(state.panel, {
+    doc, state, api,
+    others: state.docs.filter((d) => d.id !== doc.id),
+    docs: state.docs,
+  }));
 }
 
 function welcome() {

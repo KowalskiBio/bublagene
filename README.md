@@ -88,6 +88,9 @@ node tools/bg.mjs pcr plasmid.dna <forward> <reverse> --json
 - Custom enzyme sets as plain JSON (`bublagene/enzymes/1`).
 - Unique cutters, cut-count filters, per-enzyme fragment tables, simulated gels,
   and a Type IIS overhang compatibility matrix.
+- A Cloning panel drives restriction cloning and Gibson assembly from the open
+  documents: pick vector/insert, choose enzymes, read the ligation verdict for
+  both orientations, and open the product as a new tab.
 - Restriction cloning checks both insert orientations and carries surviving
   features into the construct.
 - Gibson/homology assembly joins up to 12 fragments (circular or linear);

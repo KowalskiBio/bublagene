@@ -12,13 +12,14 @@ import { findGuides, guidesToFeatures, nhejEdit, hdrEdit, editPrimers } from '..
 import { callVariants, variantsToFeatures, formatVariant } from '../variants.js';
 import { structureToSvg } from '../fold.js';
 import { describeSegments } from '../formats/dna.js';
+import { cloningPanel } from './cloningpanel.js';
 
-export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'Alignment', 'CRISPR', 'Structure', 'File'];
+export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'Cloning', 'Alignment', 'CRISPR', 'Structure', 'File'];
 
 export function renderPanel(name, ctx) {
   const el = h('div');
   ({
-    Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel,
+    Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel, Cloning: cloningPanel,
     Alignment: alignmentPanel, CRISPR: crisprPanel, Structure: structurePanel, File: file,
   })[name](el, ctx);
   return el;
