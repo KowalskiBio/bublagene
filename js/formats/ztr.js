@@ -167,7 +167,7 @@ export async function readZtr(bytes) {
 export async function readTraces(doc) {
   const out = [];
   for (const seg of doc.source?.segments ?? []) {
-    if (seg.type !== 0x10) continue;
+    if (seg.type !== 0x12) continue; // Sequence Trace
     const d = seg.data;
     const v = new DataView(d.buffer, d.byteOffset, d.byteLength);
     const id = String(v.getUint32(0, false));

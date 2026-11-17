@@ -23,7 +23,7 @@ const withTraces = [];
 for (const f of walk(ROOT)) {
   let doc;
   try { doc = readDna(readFileSync(f), f.split('/').pop()); } catch { continue; }
-  if ((doc.source?.segments ?? []).some((s) => s.type === 0x10)) withTraces.push({ file: f, doc });
+  if ((doc.source?.segments ?? []).some((s) => s.type === 0x12)) withTraces.push({ file: f, doc });
 }
 
 const roughness = (a) => {
@@ -31,6 +31,11 @@ const roughness = (a) => {
   for (let i = 1; i < a.length; i++) sum += Math.abs(a[i] - a[i - 1]);
   return sum / Math.max(1, a.length - 1);
 };
+
+test('alignable-sequence segments are not mistaken for traces', async () => {
+  const doc = { source: { segments: [{ type: 0x10, data: new Uint8Array([0, 0, 0, 0, 1, 2, 3]) }] } };
+  assert.deepEqual(await readTraces(doc), []);
+});
 
 test('sample files contain a trace to read', { skip: withTraces.length ? false : `no .dna with traces under ${ROOT}` }, () => {
   assert.ok(withTraces.length > 0);

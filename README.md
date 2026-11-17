@@ -127,6 +127,15 @@ export PATH=/opt/homebrew/opt/node@24/bin:$PATH
 
 `brew reinstall node` should repair the default one.
 
+With real `.dna` files available, point the sample tests at their folder:
+
+```bash
+DNA_SAMPLES=~/Downloads npm test
+```
+
+The reader treats segment `0x12` as a trace (sequence traces are not
+`0x10`, which is an alignable sequence).
+
 ## Run the tests
 
 ```bash
