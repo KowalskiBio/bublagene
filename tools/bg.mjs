@@ -29,6 +29,7 @@
 //   bg crispr    <file>                   find guides (--enzyme, --offtargets N)
 //   bg crispr-edit <file> <guide>         deterministic NHEJ/HDR simulation
 //   bg crispr-primers <file> <guide>      primers flanking the cut
+//   bg fold      <file> [start..end]     bounded MFE structure (--svg out.svg)
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -51,6 +52,7 @@ import { assembleContigs } from '../js/contig.js';
 import { callVariants, variantsToFeatures, formatVariant } from '../js/variants.js';
 import { readTrace, trimTrace, qualityStats, traceToDocument } from '../js/traces.js';
 import { findGuides, findOffTargets, guidesToFeatures, nhejEdit, hdrEdit, frameEffectReport, editPrimers } from '../js/crispr.js';
+import { fold, structureToText, structureToSvg } from '../js/fold.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
@@ -551,7 +553,25 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'crispr') {
+  } else if (cmd === 'fold') {
+    const { positional, flags } = splitFlags(rest, ['max-length', 'svg', 'json', 'width']);
+    let seq = doc.seq;
+    let where = 'whole sequence';
+    if (positional[0]) {
+      const r = parseRegion(positional[0], L);
+      seq = subseq(doc.seq, r.start, r.end, doc.circular);
+      where = `${r.start + 1}..${r.end}`;
+    }
+    const result = fold(seq, { maxLength: Number(flags['max-length'] ?? 250) });
+    if (flags.json) {
+      console.log(JSON.stringify({ where, energy: result.energy, structure: result.structure, pairs: result.pairs, model: result.model, limits: result.limits }, null, 2));
+    } else {
+      console.log(`${where}  ${result.length} nt  ΔG ${result.energy} kcal/mol  (${result.model})`);
+      console.log(structureToText(result.sequence, result.structure, { width: Number(flags.width ?? 60) }));
+    }
+    if (flags.svg) { writeFileSync(flags.svg, structureToSvg(result.sequence, result.structure)); console.log(`Wrote ${flags.svg}`); }
+  }
+  else if (cmd === 'crispr') {
     const { flags } = splitFlags(rest, ['enzyme', 'guide-len', 'min-gc', 'max-gc', 'offtargets', 'json', 'features', 'out']);
     const guides = findGuides(doc.seq, {
       enzyme: flags.enzyme ?? 'SpCas9',

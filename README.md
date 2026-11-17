@@ -37,6 +37,11 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **RNA structure, bounded on purpose.** A Zuker-style dynamic program over a
+  documented Turner subset (Watson–Crick + G·U, stacking, hairpin and simple
+  interior/bulge loops) returns energy, pairs and dot-bracket output, with text
+  and SVG views. It refuses sequences past the stated length and makes no
+  accuracy claim beyond the simple folds in the tests.
 - **CRISPR, honestly scoped.** PAM-aware guides for SpCas9, SaCas9, Cas12a or a
   custom PAM, with GC bounds and both strands. Off-target scoring is a labelled
   seed/mismatch heuristic, not a cleavage prediction. NHEJ and HDR edits are
@@ -158,6 +163,7 @@ node tools/bg.mjs info plasmid.dna
 | `bg crispr <file>` | PAM-aware guide finding with configurable enzymes |
 | `bg crispr-edit <file> <guide>` | deterministic NHEJ/HDR simulation with frame effects |
 | `bg crispr-primers <file> <guide>` | primers flanking the cut |
+| `bg fold <file> [start..end]` | bounded MFE structure, dot-bracket or SVG |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,
