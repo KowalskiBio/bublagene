@@ -171,4 +171,25 @@ test('typing, Backspace, arrows and paste edit the sequence at the caret', async
   $('#undoBtn').click();
   await tick();
   assert.match(status(), /10 bp/);
+
+  // every panel and cloning method renders for a plain circular sequence
+  const tabs = [...window.document.querySelectorAll('#panelTabs button')].map((b) => b.textContent);
+  for (const name of ['Features', 'Detect', 'Mutate', 'Cloning', 'File']) assert.ok(tabs.includes(name), `${name} tab`);
+  for (const name of ['Detect', 'Mutate', 'Enzymes', 'Cloning']) {
+    [...window.document.querySelectorAll('#panelTabs button')].find((b) => b.textContent === name).click();
+    await tick();
+    assert.ok($('#panel').textContent.trim().length > 20, `${name} panel has content`);
+  }
+  for (const mode of ['goldengate', 'gibson', 'infusion', 'recombination', 'topo', 'restriction']) {
+    const pick = window.document.getElementById('cloneMode');
+    pick.value = mode;
+    pick.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await tick();
+    assert.ok($('#panel').textContent.trim().length > 40, `${mode} section has content`);
+  }
+  [...window.document.querySelectorAll('#panelTabs button')].find((b) => b.textContent === 'Detect').click();
+  await tick();
+  [...window.document.querySelectorAll('#panel button')].find((b) => b.textContent === 'Detect features').click();
+  await tick();
+  assert.match($('#panel').textContent, /new element|Nothing new/);
 });

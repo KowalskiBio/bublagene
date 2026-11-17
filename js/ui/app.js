@@ -27,6 +27,8 @@ import { extractFragment, pasteFragment, reorderFeature, copyFeatures, pasteFeat
 import { offload } from '../compute.js';
 import { saveDocument, openDocument, supportsFileSystemAccess, writeAutosave, readAutosave } from '../storage.js';
 import { projectToJSON, projectFromJSON } from '../project.js';
+import { detectFeatures, hitToFeature, libraryFromDocs, normalizeLibrary, BUILTIN_LIBRARY } from '../detect.js';
+import { designMutagenesis } from '../mutagenesis.js';
 import { orfsFor, orfFeatures, primerOverlays, isOrf, isPrimer, isOverlay } from './overlays.js';
 
 const state = {
@@ -63,6 +65,10 @@ const state = {
   crispr: null,
   fold: null,
   clipboard: null,
+  mutate: { mode: 'aa', feature: null, residue: 1, newAa: 'A', bases: '', method: 'overlap', targetTm: '', result: null, error: null },
+  detect: null,        // last feature-detection run: { docId, hits, rate, useDocs }
+  detectRate: 5,       // allowed mismatches, percent
+  detectUseDocs: true,
   featureClip: null,   // annotations copied from the Features panel
   pxPerBase: 14,
   cloning: {
@@ -73,6 +79,10 @@ const state = {
     orientation: 'auto',
     gibson: [],
     minOverlap: 20,
+    infusionOverlap: 15,
+    goldenGate: { enzyme: 'BsaI', docs: [] },
+    recomb: { insert: null, acceptor: null, byproduct: null },
+    topo: { insert: null, kind: 'TA', orientation: 'forward' },
   },
   restorable: null, // a saved session found on startup, until the user answers
 };
@@ -91,6 +101,15 @@ function loadEnzymeSets() {
 }
 function storeEnzymeSets(sets) {
   try { localStorage.setItem(SETS_KEY, JSON.stringify(sets)); return true; } catch { return false; }
+}
+
+// Elements the reader saved for detection; kept in this browser only.
+const LIB_KEY = 'bublagene.featureLibrary';
+function loadUserLibrary() {
+  try { return normalizeLibrary(JSON.parse(localStorage.getItem(LIB_KEY) ?? '[]')); } catch { return []; }
+}
+function storeUserLibrary(list) {
+  try { localStorage.setItem(LIB_KEY, JSON.stringify(list)); return true; } catch { return false; }
 }
 
 const undo = new Map(); // doc id -> {past: [], future: []}
@@ -265,6 +284,8 @@ function edit(label, mutate) {
   state.alignResult = null;
   state.fold = null;
   state.crispr = null;
+  state.detect = null;
+  state.mutate = { ...state.mutate, result: null };
   // a selection that no longer fits the edited sequence would point past its end
   if (state.selection && (state.selection.end > doc.seq.length || state.selection.start > doc.seq.length)) state.selection = null;
   if (state.caret !== null && state.caret > doc.seq.length) state.caret = doc.seq.length;
@@ -620,6 +641,80 @@ const api = {
     toast(result.skipped
       ? `Pasted ${result.added}; ${result.skipped} would run past the end`
       : `Pasted ${result.added} feature${result.added === 1 ? '' : 's'}`);
+  },
+  userLibrary() { return loadUserLibrary(); },
+  setDetectOptions(patch) { Object.assign(state, patch); render(); },
+  runDetect() {
+    const doc = current();
+    if (!doc) return;
+    const others = state.docs.filter((d) => d.id !== doc.id);
+    const library = [...BUILTIN_LIBRARY, ...loadUserLibrary(), ...(state.detectUseDocs ? libraryFromDocs(others) : [])];
+    const hits = detectFeatures(doc, library, { maxMismatchRate: state.detectRate / 100 })
+      .map((h, i) => ({ ...h, key: i, checked: true }));
+    state.detect = { docId: doc.id, hits, libraryCount: library.length };
+    render();
+  },
+  toggleDetected(key) {
+    const h = state.detect?.hits.find((x) => x.key === key);
+    if (h) { h.checked = !h.checked; render(); }
+  },
+  setDetectedAll(on) { for (const h of state.detect?.hits ?? []) h.checked = on; render(); },
+  addDetected() {
+    const doc = current();
+    const picked = state.detect?.docId === doc?.id ? state.detect.hits.filter((h) => h.checked) : [];
+    if (!picked.length) return;
+    edit(`Add ${picked.length} detected feature${picked.length === 1 ? '' : 's'}`, (d) => { d.features.push(...picked.map(hitToFeature)); });
+    toast(`Added ${picked.length} feature${picked.length === 1 ? '' : 's'}`);
+    state.panel = 'Features'; // edit() has already cleared the detection results
+    render();
+  },
+  saveSelectionToLibrary() {
+    const seq = selectedSeq();
+    if (seq.length < 12) { toast('Select at least 12 bases to save as an element', 'error'); return; }
+    const name = window.prompt('Name this element:');
+    if (!name?.trim()) return;
+    const type = window.prompt('Feature type (promoter, terminator, rep_origin, misc_feature …):', 'misc_feature') || 'misc_feature';
+    const list = loadUserLibrary().filter((e) => e.name !== name.trim());
+    list.push({ name: name.trim(), type: type.trim(), kind: 'dna', seq });
+    if (!storeUserLibrary(list)) { toast('This browser would not keep the element', 'error'); return; }
+    toast(`Saved “${name.trim()}” to your library`);
+    render();
+  },
+  removeFromLibrary(name) { storeUserLibrary(loadUserLibrary().filter((e) => e.name !== name)); render(); },
+  focusDoc(id) {
+    const i = state.docs.findIndex((d) => d.id === id);
+    if (i < 0) return;
+    state.active = i; state.selection = null; state.caret = null; state.highlight = null; state.selectedFeatures = new Set();
+    render(); el('panel').scrollTop = 0;
+  },
+  setMutate(patch) { state.mutate = { ...state.mutate, result: null, error: null, ...patch }; render(); },
+  runMutagenesis(change) {
+    const doc = current();
+    if (!doc || !change) return;
+    try {
+      const result = designMutagenesis(doc, change, { method: state.mutate.method, targetTm: Number(state.mutate.targetTm) || null });
+      state.mutate = { ...state.mutate, result, error: null };
+    } catch (e) {
+      state.mutate = { ...state.mutate, result: null, error: e.message };
+    }
+    render();
+  },
+  openMutant() {
+    const r = state.mutate.result;
+    if (!r) return;
+    api.openDoc(r.mutant);
+    toast(`${r.mutant.name}: ${fmt(r.mutant.seq.length)} bp`);
+  },
+  addMutagenicPrimers() {
+    const r = state.mutate.result;
+    if (!r) return;
+    const keep = state.mutate;
+    edit(`Add primers for ${r.label}`, (d) => {
+      for (const p of [r.forward, r.reverse]) d.primers.push({ id: newId(), name: p.name, seq: p.seq, description: `Mutagenic primer for ${r.label}`, extra: {} });
+    });
+    state.mutate = keep;
+    state.panel = 'Primers';
+    render();
   },
   copyFragment() {
     const doc = current();

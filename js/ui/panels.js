@@ -13,13 +13,14 @@ import { callVariants, variantsToFeatures, formatVariant } from '../variants.js'
 import { structureToSvg } from '../fold.js';
 import { describeSegments } from '../formats/dna.js';
 import { cloningPanel } from './cloningpanel.js';
+import { aminoAcidChange } from '../mutagenesis.js';
 
-export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'Cloning', 'Alignment', 'CRISPR', 'Structure', 'File'];
+export const PANELS = ['Features', 'Detect', 'Primers', 'Mutate', 'Enzymes', 'Digest', 'Cloning', 'Alignment', 'CRISPR', 'Structure', 'File'];
 
 export function renderPanel(name, ctx) {
   const el = h('div');
   ({
-    Features: features, Primers: primers, Enzymes: enzymes, Digest: digestPanel, Cloning: cloningPanel,
+    Features: features, Detect: detectPanel, Primers: primers, Mutate: mutatePanel, Enzymes: enzymes, Digest: digestPanel, Cloning: cloningPanel,
     Alignment: alignmentPanel, CRISPR: crisprPanel, Structure: structurePanel, File: file,
   })[name](el, ctx);
   return el;
@@ -206,6 +207,51 @@ function featureDetail(f, { doc, api }) {
   return box;
 }
 
+// ---- Detect -----------------------------------------------------------------
+
+function detectPanel(el, { doc, state, api, others = [] }) {
+  const run = state.detect?.docId === doc.id ? state.detect : null;
+  const mine = api.userLibrary();
+  el.append(h('h3', {}, 'Find known elements'));
+  el.append(h('p', { class: 'sub' }, 'Scans both strands for promoters, tags, cleavage and recombination sites. Tags are found in any frame, whatever the codons.'));
+  el.append(h('label', { class: 'field' }, h('span', {}, `Allowed mismatches: ${state.detectRate}%`),
+    h('input', { id: 'detectRate', type: 'range', min: 0, max: 15, step: 1, value: state.detectRate, oninput: (e) => api.setDetectOptions({ detectRate: Number(e.target.value) }) })));
+  if (others.length) {
+    el.append(h('label', { class: 'sub', style: { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' } },
+      h('input', { type: 'checkbox', checked: state.detectUseDocs, onchange: (e) => api.setDetectOptions({ detectUseDocs: e.target.checked }) }),
+      `Also use features annotated in the ${others.length} other open file${others.length === 1 ? '' : 's'}`));
+  }
+  el.append(h('button', { class: 'btn primary', disabled: !doc.seq.length, onclick: () => api.runDetect() }, 'Detect features'));
+
+  if (run) {
+    el.append(h('h3', {}, `${run.hits.length} new element${run.hits.length === 1 ? '' : 's'} found`));
+    if (!run.hits.length) el.append(h('p', { class: 'empty' }, `Nothing new among ${run.libraryCount} known elements. Try allowing more mismatches.`));
+    else {
+      el.append(h('div', { class: 'group' },
+        h('button', { class: 'btn primary', disabled: !run.hits.some((x) => x.checked), onclick: () => api.addDetected() }, `Add ${run.hits.filter((x) => x.checked).length} checked`),
+        h('button', { class: 'btn', onclick: () => api.setDetectedAll(true) }, 'All'),
+        h('button', { class: 'btn', onclick: () => api.setDetectedAll(false) }, 'None')));
+      for (const x of run.hits) {
+        el.append(h('div', { class: 'row', onclick: () => api.setSelection({ start: x.start, end: x.end }) },
+          h('input', { type: 'checkbox', checked: x.checked, onclick: (e) => { e.stopPropagation(); api.toggleDetected(x.key); } }),
+          h('span', { class: 'swatch', style: { background: colorFor(x.type) } }),
+          h('span', { class: 'label' }, h('span', {}, x.name), h('span', { class: 'sub', style: { marginLeft: '6px' } }, x.source === 'document' ? 'from your files' : x.type)),
+          h('span', { class: 'meta', title: x.note || '' }, `${fmt(x.start + 1)}–${fmt(x.end || doc.seq.length)} ${x.strand === -1 ? '←' : '→'}${x.identity < 100 ? ` ${x.identity.toFixed(0)}%` : ''}`)));
+      }
+    }
+  }
+
+  el.append(h('h3', {}, 'Your library'));
+  el.append(h('p', { class: 'sub' }, 'Select an element in the sequence and save it here to have it found in future files. It stays in this browser.'));
+  el.append(h('button', { class: 'btn', disabled: !state.selection, onclick: () => api.saveSelectionToLibrary() }, state.selection ? 'Save the selection as an element…' : 'Select bases to save an element'));
+  for (const e of mine) {
+    el.append(h('div', { class: 'row' },
+      h('span', { class: 'label' }, e.name, h('span', { class: 'sub', style: { marginLeft: '6px' } }, `${e.seq.length} bp`)),
+      h('button', { class: 'btn', style: { padding: '1px 7px' }, onclick: () => api.removeFromLibrary(e.name) }, 'Remove')));
+  }
+  if (!mine.length) el.append(h('p', { class: 'empty' }, 'Nothing saved yet.'));
+}
+
 // ---- Primers ----------------------------------------------------------------
 
 function primers(el, { doc, state, api }) {
@@ -286,6 +332,76 @@ function primers(el, { doc, state, api }) {
   if (doc.primers.length >= 2) {
     el.append(h('p', { class: 'sub', style: { marginTop: '6px' } }, 'Tip: paste two of the primers above.'));
   }
+}
+
+// ---- Mutagenesis ------------------------------------------------------------
+
+const AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'.split('');
+
+function mutatePanel(el, { doc, state, api }) {
+  const m = state.mutate;
+  const cds = doc.features.filter((f) => f.type === 'CDS');
+  el.append(h('h3', {}, 'Site-directed mutagenesis'));
+  el.append(h('p', { class: 'sub' }, 'Designs the primers for a substitution, insertion or deletion in a circular plasmid, and builds the expected mutant.'));
+  if (!doc.circular) { el.append(h('p', { class: 'empty' }, 'This file is linear. Mutagenesis primers amplify the whole plasmid, so set the topology to circular in the File panel first.')); return; }
+
+  el.append(h('label', { class: 'field' }, h('span', {}, 'What to change'),
+    h('select', { id: 'mutMode', onchange: (e) => api.setMutate({ mode: e.target.value }) },
+      [['aa', 'An amino acid of a CDS'], ['bases', 'The selected bases']].map(([v, t]) => h('option', { value: v, selected: m.mode === v }, t)))));
+
+  let change = null;
+  let problem = null;
+  if (m.mode === 'aa') {
+    if (!cds.length) problem = 'This file has no CDS feature. Add one, or edit the bases directly.';
+    else {
+      const feature = cds.find((f) => f.id === m.feature) ?? cds[0];
+      el.append(h('label', { class: 'field' }, h('span', {}, 'Coding sequence'),
+        h('select', { id: 'mutCds', onchange: (e) => api.setMutate({ feature: e.target.value }) },
+          cds.map((f) => h('option', { value: f.id, selected: f.id === feature.id }, f.name)))));
+      el.append(h('div', { class: 'group' },
+        h('label', { class: 'field', style: { flex: '1 1 90px' } }, h('span', {}, 'Residue number'),
+          h('input', { id: 'mutResidue', type: 'number', min: 1, value: m.residue, oninput: (e) => api.setMutate({ residue: Number(e.target.value) || 1 }) })),
+        h('label', { class: 'field', style: { flex: '1 1 90px' } }, h('span', {}, 'Change it to'),
+          h('select', { id: 'mutAa', onchange: (e) => api.setMutate({ newAa: e.target.value }) },
+            [...AMINO_ACIDS, 'Stop'].map((a) => h('option', { value: a, selected: m.newAa === a }, a))))));
+      try { change = aminoAcidChange(doc, feature, m.residue, m.newAa); } catch (e) { problem = e.message; }
+    }
+  } else {
+    const sel = state.selection;
+    const at = sel ?? (state.caret != null ? { start: state.caret, end: state.caret } : null);
+    el.append(h('p', { class: 'sub' }, at ? (at.end > at.start ? `Replaces ${fmt(at.start + 1)}–${fmt(at.end)} (${fmt(at.end - at.start)} bp)` : `Inserts at ${fmt(at.start + 1)}`) : 'Select bases in the sequence, or click to place the cursor.'));
+    el.append(h('label', { class: 'field' }, h('span', {}, 'New bases (leave empty to delete the selection)'),
+      h('input', { id: 'mutBases', class: 'mono', value: m.bases, placeholder: 'e.g. GAA', oninput: (e) => api.setMutate({ bases: e.target.value }) })));
+    if (at && at.end >= at.start) {
+      const bases = cleanSequence(m.bases);
+      if (!bases && at.end === at.start) problem = 'Nothing to change yet.';
+      else change = { start: at.start, end: at.end, newBases: bases, oldBases: doc.seq.slice(at.start, at.end), label: `${at.end > at.start ? (bases ? 'sub' : 'del') : 'ins'}${at.start + 1}` };
+    }
+  }
+  if (change) el.append(h('p', { class: 'sub mono' }, change.label && change.oldCodon ? `${change.label}: ${change.oldCodon} → ${change.newCodon} at ${fmt(change.start + 1)}–${fmt(change.end || doc.seq.length)}` : `${change.oldBases || '–'} → ${change.newBases || '–'}`));
+  else if (problem) el.append(h('p', { class: 'empty' }, problem));
+
+  el.append(h('div', { class: 'group' },
+    h('label', { class: 'field', style: { flex: '2 1 140px' } }, h('span', {}, 'Primer design'),
+      h('select', { id: 'mutMethod', onchange: (e) => api.setMutate({ method: e.target.value, targetTm: '' }) },
+        [['overlap', 'Overlapping pair (QuikChange-style)'], ['backtoback', 'Back-to-back (Q5 SDM-style)']].map(([v, t]) => h('option', { value: v, selected: m.method === v }, t)))),
+    h('label', { class: 'field', style: { flex: '1 1 70px' } }, h('span', {}, 'Target Tm °C'),
+      h('input', { id: 'mutTm', type: 'number', min: 50, max: 85, value: m.targetTm, placeholder: m.method === 'overlap' ? '78' : '62', oninput: (e) => api.setMutate({ targetTm: e.target.value }) }))));
+  el.append(h('button', { class: 'btn primary', disabled: !change, onclick: () => api.runMutagenesis(change) }, 'Design primers'));
+
+  if (m.error) el.append(h('p', { class: 'empty' }, m.error));
+  const r = m.result;
+  if (!r) return;
+  el.append(h('h3', {}, `${r.label} · ${r.kind}`));
+  for (const p of [r.forward, r.reverse]) {
+    el.append(h('div', { style: { marginBottom: '8px' } },
+      h('div', { class: 'sub' }, `${p.name} · ${p.length} nt · Tm ${p.tm.toFixed(1)}°C · GC ${p.gc.toFixed(0)}%`),
+      h('div', { class: 'mono', style: { wordBreak: 'break-all', fontSize: '12px' } }, p.seq)));
+  }
+  for (const n of r.notes) el.append(h('p', { class: 'sub' }, n));
+  el.append(h('div', { class: 'group' },
+    h('button', { class: 'btn primary', onclick: () => api.openMutant() }, `Create the mutant (${fmt(r.mutant.seq.length)} bp)`),
+    h('button', { class: 'btn', onclick: () => api.addMutagenicPrimers() }, 'Add primers to this file')));
 }
 
 // ---- Enzymes ----------------------------------------------------------------

@@ -666,6 +666,22 @@ export function gibsonAssemble(inputs, {
   return { doc, junctions, inputs: inputsMeta, order: placements.map((p) => ({ index: p.index, reverse: p.piece.reverse })), warnings };
 }
 
+// In-Fusion is homology-based like Gibson, with shorter overlaps (15 bp is the
+// usual design). The chemistry differs, the sequence arithmetic does not, so this
+// is the same assembly relabelled.
+export function infusionAssemble(inputs, opts = {}) {
+  const result = gibsonAssemble(inputs, { minOverlap: 15, ...opts });
+  const { doc } = result;
+  doc.name = doc.name.replace(/gibson/gi, 'In-Fusion');
+  doc.cloning.product.name = doc.name;
+  doc.cloning.type = 'in-fusion';
+  doc.cloning.operation = 'in-fusion-assembly';
+  const last = [...doc.history].reverse().find((e) => e.action === 'Gibson assembly');
+  if (last) last.action = 'In-Fusion assembly';
+  doc.notes.description = doc.notes.description.replace(/gibson/gi, 'In-Fusion');
+  return result;
+}
+
 // ---- history ---------------------------------------------------------------
 
 export const CLONING_SCHEMA = 'bublagene/cloning/1';
@@ -718,7 +734,9 @@ export function cloningSummary(doc) {
     })),
     junctions: c.junctions.map((j) => ({
       position: j.position,
-      kind: j.type === 'overlap' ? `${j.overhang.length} bp overlap` : j.type === 'blunt' ? 'blunt' : `${j.type}′ ${j.overhang}`,
+      kind: j.type === 'overlap' ? `${j.overhang.length} bp overlap`
+        : j.type === 'recombination' ? `${j.overhang.length} bp recombined core`
+          : j.type === 'ta' ? 'TA overhang' : j.type === 'blunt' ? 'blunt' : `${j.type}′ ${j.overhang}`,
       enzymes: (j.enzymes ?? []).filter(Boolean),
       regenerated: (j.regeneratedSites ?? []).map((s) => `${s.name} at ${s.pos + 1}`),
       sequence: j.sequence?.top ?? '',

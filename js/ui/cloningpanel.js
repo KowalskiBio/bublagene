@@ -3,7 +3,17 @@
 
 import { h, clear, fmt, toast } from './dom.js';
 import { ENZYME_BY_NAME, COMMON_SET, findSites, digest } from '../enzymes.js';
-import { restrictionClone, gibsonAssemble, checkLigation, pieceFromFragment, describeEnd, cloningSummary } from '../cloning.js';
+import { restrictionClone, gibsonAssemble, infusionAssemble, checkLigation, pieceFromFragment, describeEnd } from '../cloning.js';
+import { goldenGateAssemble, goldenGatePieces } from '../assembly.js';
+import { findRecombinationSites, recombine, topoClone } from '../recombination.js';
+import { ligationPreview } from './ligation-preview.js';
+import { historyTree } from './historytree.js';
+
+const MODES = [
+  ['restriction', 'Restriction + ligation'], ['goldengate', 'Golden Gate'], ['gibson', 'Gibson'],
+  ['infusion', 'In-Fusion'], ['recombination', 'Recombination (att, lox, FRT)'], ['topo', 'TOPO / TA / blunt'],
+];
+const TYPE_IIS = ['BsaI', 'BsmBI', 'BbsI', 'SapI', 'Esp3I'].filter((n) => ENZYME_BY_NAME[n]);
 
 // Enzymes worth offering for a cut: those that cut this sequence a handful of
 // times, rarest first, since a cloning site is usually a unique cutter.
@@ -96,11 +106,16 @@ export function cloningPanel(el, { doc, state, api, docs }) {
     el.append(h('p', { class: 'sub' }, 'Open the vector and the insert as two files to clone between them. You can open the same file twice.'));
   }
 
-  el.append(h('div', { class: 'seg', style: { marginBottom: '12px' } },
-    h('button', { 'aria-pressed': String(c.mode === 'restriction'), onclick: () => api.setCloning({ mode: 'restriction' }) }, 'Restriction'),
-    h('button', { 'aria-pressed': String(c.mode === 'gibson'), onclick: () => api.setCloning({ mode: 'gibson' }) }, 'Gibson')));
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Method'),
+    h('select', { id: 'cloneMode', onchange: (e) => api.setCloning({ mode: e.target.value }) },
+      MODES.map(([v, t]) => h('option', { value: v, selected: c.mode === v }, t)))));
 
-  if (c.mode === 'gibson') return gibsonSection(el, { state, api, docs });
+  const done = () => { if (doc?.cloning) el.append(historyTree(doc, docs, (id) => api.focusDoc(id))); };
+  if (c.mode === 'gibson') { gibsonSection(el, { state, api, docs }, { title: 'Gibson', assemble: gibsonAssemble, overlapKey: 'minOverlap' }); return done(); }
+  if (c.mode === 'infusion') { gibsonSection(el, { state, api, docs }, { title: 'In-Fusion', assemble: infusionAssemble, overlapKey: 'infusionOverlap' }); return done(); }
+  if (c.mode === 'goldengate') { goldenGateSection(el, { state, api, docs }); return done(); }
+  if (c.mode === 'recombination') { recombinationSection(el, { state, api, docs }); return done(); }
+  if (c.mode === 'topo') { topoSection(el, { doc, state, api, docs }); return done(); }
 
   const vector = sidePicker(el, { label: 'Vector', side: 'vector', state, api, docs });
   const insert = sidePicker(el, { label: 'Insert', side: 'insert', state, api, docs });
@@ -113,7 +128,7 @@ export function cloningPanel(el, { doc, state, api, docs }) {
     h('select', { onchange: (e) => api.setCloning({ orientation: e.target.value }) },
       [['auto', 'whichever fits'], ['forward', 'forward'], ['reverse', 'reverse']].map(([v, t]) => h('option', { value: v, selected: c.orientation === v }, t)))));
 
-  if (!vector || !insert) return;
+  if (!vector || !insert) return done();
 
   // tell the user whether it will ligate before they commit to it
   let check = null;
@@ -125,7 +140,7 @@ export function cloningPanel(el, { doc, state, api, docs }) {
     });
   } catch (e) {
     el.append(h('p', { class: 'empty' }, e.message));
-    return;
+    return done();
   }
 
   const box = h('div', { class: 'checkbox' });
@@ -139,6 +154,10 @@ export function cloningPanel(el, { doc, state, api, docs }) {
   for (const w of check.warnings) el.append(h('p', { class: 'sub' }, w));
 
   const can = c.orientation === 'auto' ? check.orientations.length > 0 : check[c.orientation]?.compatible;
+  if (can) {
+    const preview = ligationPreview({ vector, insert, circular: c.circular, orientation: c.orientation });
+    if (preview) el.append(preview);
+  }
   el.append(h('button', {
     class: 'btn primary', disabled: !can, style: { marginTop: '10px' },
     onclick: () => {
@@ -158,13 +177,14 @@ export function cloningPanel(el, { doc, state, api, docs }) {
     },
   }, can ? 'Ligate' : 'These ends do not ligate'));
 
-  if (doc?.cloning) el.append(provenance(doc));
+  done();
 }
 
-function gibsonSection(el, { state, api, docs }) {
+function gibsonSection(el, { state, api, docs }, { title, assemble, overlapKey }) {
   const c = state.cloning;
+  const overlap = c[overlapKey] ?? 15;
   el.append(h('h3', {}, 'Fragments to assemble'));
-  el.append(h('p', { class: 'sub' }, 'Pick them in the order they should join. Each needs an end overlapping the next.'));
+  el.append(h('p', { class: 'sub' }, `${title} joins linear fragments by their shared end sequences. Pick them in the order they should join; each needs an end overlapping the next.`));
   for (const d of docs) {
     const on = c.gibson.includes(d.id);
     el.append(h('div', {
@@ -174,8 +194,8 @@ function gibsonSection(el, { state, api, docs }) {
       h('span', { class: 'label' }, d.name),
       h('span', { class: 'meta' }, on ? `#${c.gibson.indexOf(d.id) + 1} · ${fmt(d.seq.length)} bp` : `${fmt(d.seq.length)} bp`)));
   }
-  el.append(h('label', { class: 'field', style: { marginTop: '10px' } }, h('span', {}, `Smallest overlap: ${c.minOverlap} bp`),
-    h('input', { type: 'range', min: 10, max: 60, value: c.minOverlap, oninput: (e) => api.setCloning({ minOverlap: Number(e.target.value) }) })));
+  el.append(h('label', { class: 'field', style: { marginTop: '10px' } }, h('span', {}, `Smallest overlap: ${overlap} bp`),
+    h('input', { id: `overlap-${overlapKey}`, type: 'range', min: 10, max: 60, value: overlap, oninput: (e) => api.setCloning({ [overlapKey]: Number(e.target.value) }) })));
   el.append(h('label', { class: 'field' }, h('span', {}, 'Shape'),
     h('select', { onchange: (e) => api.setCloning({ circular: e.target.value === 'circular' }) },
       [['circular', 'circular plasmid'], ['linear', 'linear fragment']].map(([v, t]) => h('option', { value: v, selected: c.circular === (v === 'circular') }, t)))));
@@ -185,8 +205,8 @@ function gibsonSection(el, { state, api, docs }) {
     class: 'btn primary', disabled: chosen.length < 2,
     onclick: () => {
       try {
-        const result = gibsonAssemble(chosen.map((d) => ({ doc: d })), {
-          circular: c.circular, minOverlap: c.minOverlap,
+        const result = assemble(chosen.map((d) => ({ doc: d })), {
+          circular: c.circular, minOverlap: overlap,
         });
         api.openDoc(result.doc);
         for (const w of result.warnings) toast(w);
@@ -198,21 +218,138 @@ function gibsonSection(el, { state, api, docs }) {
   }, chosen.length < 2 ? 'Pick at least two fragments' : `Assemble ${chosen.length} fragments`));
 }
 
-// What this document was made from, once it is a cloning product.
-function provenance(doc) {
-  const s = cloningSummary(doc);
-  const box = h('div');
-  if (!s) return box;
-  box.append(h('h3', {}, 'How this was made'));
-  box.append(h('p', { class: 'sub' }, `${s.operation} · ${fmt(s.size)} bp · ${s.circular ? 'circular' : 'linear'}`));
-  for (const i of s.inputs) {
-    box.append(h('div', { class: 'row' },
-      h('span', { class: 'label' }, i.name),
-      h('span', { class: 'meta' }, `${i.role}${i.orientation && i.orientation !== 'forward' ? ` · ${i.orientation}` : ''} · ${fmt(i.size)} bp`)));
+// ---- Golden Gate -------------------------------------------------------------
+
+function goldenGateSection(el, { state, api, docs }) {
+  const c = state.cloning;
+  const gg = c.goldenGate;
+  el.append(h('h3', {}, 'Golden Gate'));
+  el.append(h('p', { class: 'sub' }, 'Each file carries a Type IIS site at both ends, pointing inward. The overhangs they leave decide the order; the first file is the backbone.'));
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Enzyme'),
+    h('select', { onchange: (e) => api.setCloning({ goldenGate: { ...gg, enzyme: e.target.value } }) },
+      TYPE_IIS.map((n) => h('option', { value: n, selected: gg.enzyme === n }, `${n} (${ENZYME_BY_NAME[n].site})`)))));
+
+  for (const d of docs) {
+    const at = gg.docs.indexOf(d.id);
+    el.append(h('div', {
+      class: 'row', 'aria-current': String(at >= 0),
+      onclick: () => api.setCloning({ goldenGate: { ...gg, docs: at >= 0 ? gg.docs.filter((x) => x !== d.id) : [...gg.docs, d.id] } }),
+    },
+      h('span', { class: 'label' }, d.name),
+      h('span', { class: 'meta' }, at >= 0 ? `#${at + 1}${at === 0 ? ' backbone' : ''} · ${fmt(d.seq.length)} bp` : `${fmt(d.seq.length)} bp`)));
   }
-  for (const j of s.junctions) {
-    box.append(h('p', { class: 'sub mono', style: { fontSize: '11.5px' } },
-      `${fmt(j.position)}: ${j.kind}${j.enzymes.length ? ` (${j.enzymes.join('/')})` : ''}${j.regenerated.length ? ` · remakes ${j.regenerated.join(', ')}` : ''}`));
+
+  const chosen = gg.docs.map((id) => docs.find((d) => d.id === id)).filter(Boolean);
+  const pieces = chosen.map((d) => {
+    try { return { doc: d, ...goldenGatePieces(d, { enzyme: gg.enzyme }) }; } catch (e) { return { doc: d, error: e.message }; }
+  });
+  if (pieces.length) {
+    el.append(h('h3', {}, 'Overhangs'));
+    const table = h('table', { class: 'data' }, h('tr', {}, h('th', {}, 'File'), h('th', {}, 'Left'), h('th', {}, 'Right'), h('th', {}, 'Body')));
+    for (const p of pieces) {
+      table.append(p.error
+        ? h('tr', {}, h('td', {}, p.doc.name), h('td', { colSpan: 3, style: { color: 'var(--danger)' } }, p.error))
+        : h('tr', {}, h('td', {}, p.doc.name), h('td', { class: 'mono' }, p.left), h('td', { class: 'mono' }, p.right), h('td', {}, `${fmt(p.seq.length)} bp`)));
+    }
+    el.append(table);
+    const ok = pieces.filter((p) => !p.error);
+    if (ok.length === pieces.length && pieces.length > 1) {
+      const rows = [];
+      pieces.forEach((p, i) => {
+        const next = pieces[i + 1] ?? (c.circular ? pieces[0] : null);
+        if (!next) return;
+        const fits = p.right === next.left;
+        rows.push(h('div', { class: `checkrow ${fits ? 'ok' : 'no'}` }, h('span', {}, fits ? '✓' : '✕'),
+          h('span', { class: 'label' }, `${p.doc.name} → ${next.doc.name}: ${p.right} ${fits ? '=' : '≠'} ${next.left}`)));
+      });
+      el.append(h('div', { class: 'checkbox' }, rows));
+    }
   }
-  return box;
+  el.append(h('label', { class: 'field', style: { marginTop: '8px' } }, h('span', {}, 'Shape'),
+    h('select', { onchange: (e) => api.setCloning({ circular: e.target.value === 'circular' }) },
+      [['circular', 'circular plasmid'], ['linear', 'linear fragment']].map(([v, t]) => h('option', { value: v, selected: c.circular === (v === 'circular') }, t)))));
+  el.append(h('button', {
+    class: 'btn primary', disabled: chosen.length < 2,
+    onclick: () => {
+      try {
+        const result = goldenGateAssemble(chosen.map((d) => ({ doc: d })), { circular: c.circular, enzyme: gg.enzyme });
+        api.openDoc(result.doc);
+        for (const e of result.errors) toast(e.message, 'error');
+        for (const w of result.warnings) toast(w);
+        toast(`${result.doc.name}: ${fmt(result.doc.seq.length)} bp from ${chosen.length} fragments`);
+      } catch (e) { toast(e.message, 'error'); }
+    },
+  }, chosen.length < 2 ? 'Pick at least two files' : `Assemble ${chosen.length} files`));
+}
+
+// ---- Recombination -----------------------------------------------------------
+
+function sitesLine(doc) {
+  const sites = findRecombinationSites(doc);
+  return sites.length ? sites.map((x) => `${x.name}${x.strand === -1 ? ' ←' : ''}`).join(', ') : 'no att, lox or FRT sites';
+}
+
+function recombinationSection(el, { state, api, docs }) {
+  const c = state.cloning.recomb;
+  el.append(h('h3', {}, 'Site-specific recombination'));
+  el.append(h('p', { class: 'sub' }, 'Swaps the stretch between two matching sites of one file into the other, inside the sites\' shared core. Works for Gateway att sites (LR and BP), loxP and FRT. Sites come from the files\' own annotations; attB1 and attB2 are also found by sequence.'));
+  const pick = (key, label) => {
+    const chosen = docs.find((d) => d.id === c[key]) ?? (key === 'insert' ? docs[0] : docs[docs.length - 1]);
+    el.append(h('label', { class: 'field' }, h('span', {}, label),
+      h('select', { onchange: (e) => api.setCloning({ recomb: { ...c, [key]: e.target.value } }) },
+        docs.map((d) => h('option', { value: d.id, selected: d.id === chosen?.id }, `${d.name} (${fmt(d.seq.length)} bp)`)))));
+    if (chosen) el.append(h('p', { class: 'sub' }, `Sites: ${sitesLine(chosen)}`));
+    return chosen;
+  };
+  const insert = pick('insert', 'Insert from (entry clone, or attB-flanked fragment)');
+  const acceptor = pick('acceptor', 'Into (destination, or donor vector)');
+  el.append(h('button', {
+    class: 'btn primary', disabled: !insert || !acceptor,
+    onclick: () => {
+      try {
+        const result = recombine(insert, acceptor);
+        state.cloning.recomb.byproduct = result.byproduct ? { doc: result.byproduct } : null;
+        api.openDoc(result.doc);
+        for (const w of result.warnings) toast(w);
+        toast(`${result.doc.name}: ${fmt(result.doc.seq.length)} bp`);
+      } catch (e) { toast(e.message, 'error'); }
+    },
+  }, 'Recombine'));
+  if (c.byproduct) {
+    el.append(h('button', { class: 'btn', style: { marginLeft: '6px' }, onclick: () => { api.openDoc(c.byproduct.doc); } }, 'Open the by-product'));
+  }
+}
+
+// ---- TOPO / TA / blunt -------------------------------------------------------
+
+function topoSection(el, { doc, state, api, docs }) {
+  const c = state.cloning.topo;
+  const insertChoices = docs.filter((d) => d.id !== doc.id);
+  const sel = state.selection;
+  const site = sel ? { start: sel.start, end: sel.end } : state.caret != null ? { start: state.caret, end: state.caret } : null;
+  el.append(h('h3', {}, 'TOPO, TA and blunt cloning'));
+  el.append(h('p', { class: 'sub' }, `The vector is the file you are looking at (${doc.name}). Select the cloning site in its sequence, or click to put the cursor where the insert goes; a selection is replaced.`));
+  el.append(h('p', { class: 'sub' }, site ? (site.end > site.start ? `Site: replaces ${fmt(site.start + 1)}–${fmt(site.end)}` : `Site: insert at ${fmt(site.start + 1)}`) : 'Site: not chosen yet'));
+  if (!insertChoices.length) { el.append(h('p', { class: 'empty' }, 'Open the insert as a second file.')); return; }
+  const chosen = insertChoices.find((d) => d.id === c.insert) ?? insertChoices[0];
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Insert'),
+    h('select', { onchange: (e) => api.setCloning({ topo: { ...c, insert: e.target.value } }) },
+      insertChoices.map((d) => h('option', { value: d.id, selected: d.id === chosen.id }, `${d.name} (${fmt(d.seq.length)} bp)`)))));
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Kind'),
+    h('select', { onchange: (e) => api.setCloning({ topo: { ...c, kind: e.target.value } }) },
+      [['TA', 'TA (3′ A overhang insert)'], ['blunt', 'Blunt'], ['directional', 'Directional (insert starts CACC)']].map(([v, t]) => h('option', { value: v, selected: c.kind === v }, t)))));
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Insert orientation'),
+    h('select', { onchange: (e) => api.setCloning({ topo: { ...c, orientation: e.target.value } }) },
+      [['forward', 'forward'], ['reverse', 'reverse']].map(([v, t]) => h('option', { value: v, selected: c.orientation === v }, t)))));
+  el.append(h('button', {
+    class: 'btn primary', disabled: !site,
+    onclick: () => {
+      try {
+        const result = topoClone(doc, chosen, { kind: c.kind, range: site, orientation: c.orientation });
+        api.openDoc(result.doc);
+        for (const w of result.warnings) toast(w);
+        toast(`${result.doc.name}: ${fmt(result.doc.seq.length)} bp`);
+      } catch (e) { toast(e.message, 'error'); }
+    },
+  }, site ? 'Clone' : 'Choose a site first'));
 }
