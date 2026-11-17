@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "bg": "tools/bg.mjs"
+  },
   "description": "A browser-based DNA sequence viewer and editor for .dna, GenBank and FASTA files",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://kowalskibio.github.io/bublagene/",
