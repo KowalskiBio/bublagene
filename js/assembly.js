@@ -223,13 +223,30 @@ export function goldenGateAssemble(fragments, {
   for (const placement of placements) {
     if (!placement.piece.doc) continue;
     const src = placement.piece.doc;
-    const offset = placement.start + placement.piece.left.length;
+    const range = placement.piece.evidence?.bodyRange;
+    const bodyStart = range?.start ?? 0;
+    const bodyEnd = range?.end ?? src.seq.length;
+    const linear = bodyEnd >= bodyStart;
+    const offset = placement.start + placement.piece.left.length - bodyStart;
     for (const f of src.features ?? []) {
-      const segs = f.segments
-        .map((s) => ({ ...structuredClone(s), start: s.start - 0 + offset, end: s.end - 0 + offset }))
-        .filter((s) => s.start < placement.end && s.end > placement.start);
+      const segs = [];
+      for (const s of f.segments ?? []) {
+        if (linear) {
+          const a = Math.max(s.start, bodyStart);
+          const b = Math.min(s.end, bodyEnd);
+          if (b <= a) continue;
+          segs.push({ ...structuredClone(s), start: a + offset, end: b + offset });
+        } else {
+          // A wrapping source body: keep only the part inside the piece.
+          const inFirst = s.start >= bodyStart;
+          const inSecond = s.end <= bodyEnd;
+          if (inFirst) segs.push({ ...structuredClone(s), start: s.start + offset, end: Math.min(s.end, src.seq.length) + offset });
+          else if (inSecond) segs.push({ ...structuredClone(s), start: s.start + offset, end: s.end + offset });
+        }
+      }
       if (!segs.length) continue;
-      doc.features.push({ ...structuredClone(f), id: newId(), segments: segs });
+      doc.features.push({ ...structuredClone(f), id: newId(), segments: segs.filter((s) => s.start < placement.end && s.end > placement.start) });
+      if (!doc.features[doc.features.length - 1].segments.length) doc.features.pop();
     }
   }
 

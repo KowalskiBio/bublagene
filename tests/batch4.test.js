@@ -85,6 +85,17 @@ test('Golden Gate overhangs derived from Type IIS cut sites', () => {
   assert.equal(replayAssembly(result.plan).ok, true);
 });
 
+test('Golden Gate carries source features into the product', () => {
+  const doc = newDocument({ name: 'src', seq: 'GGTCTC' + 'A' + 'CGTT' + 'ATGCATGCAT' + 'GGGGG' + 'GAGACC' + 'TTTT' });
+  doc.features = [{ id: newId(), name: 'body bit', type: 'misc_feature', strand: 1, color: '#888',
+    segments: [{ start: 15, end: 18 }], qualifiers: [], extra: {} }];
+  const f2 = { name: 'f2', seq: 'CCCCAAAA', left: 'GGGG', right: 'CGTT' };
+  const result = goldenGateAssemble([doc, f2], { circular: true, enzyme: 'BsaI' });
+  assert.equal(result.doc.features.length, 1);
+  const seq = result.doc.seq.slice(result.doc.features[0].segments[0].start, result.doc.features[0].segments[0].end);
+  assert.equal(seq, 'ATG');
+});
+
 test('junction validation: forbidden sites, duplicate overhangs and frame', () => {
   const f1 = { name: 'f1', seq: 'ATGAAACCCTTT', left: 'AATG', right: 'GGTA' };
   const f2 = { name: 'f2', seq: 'GGTCTCAAAA', left: 'GGTA', right: 'AATG' };
