@@ -37,6 +37,11 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **CRISPR, honestly scoped.** PAM-aware guides for SpCas9, SaCas9, Cas12a or a
+  custom PAM, with GC bounds and both strands. Off-target scoring is a labelled
+  seed/mismatch heuristic, not a cleavage prediction. NHEJ and HDR edits are
+  deterministic for a seed and report frame effects; `crispr_site` features and
+  flanking primers are produced directly.
 - **Chromatograms.** ABI (`.ab1`) and SCF traces are decoded into four dye
   channels, called bases, peak positions and Phred qualities (ZTR was already
   supported). Mott or Phred trimming returns base coordinates, can add trim
@@ -150,6 +155,9 @@ node tools/bg.mjs info plasmid.dna
 | `bg variants <ref> <query>` | SNPs/indels with normalised representation |
 | `bg trace <trace.ab1\|.scf>` | chromatogram summary and quality |
 | `bg trim <trace> [flags]` | Mott/Phred trimming, optionally writing FASTA |
+| `bg crispr <file>` | PAM-aware guide finding with configurable enzymes |
+| `bg crispr-edit <file> <guide>` | deterministic NHEJ/HDR simulation with frame effects |
+| `bg crispr-primers <file> <guide>` | primers flanking the cut |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,

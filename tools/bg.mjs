@@ -26,6 +26,9 @@
 //   bg variants  <ref> <query> [--features]     SNPs/indels between two sequences
 //   bg trace     <trace.ab1|.scf>               chromatogram summary
 //   bg trim      <trace> [--mode mott|phred] [--cutoff 20] [--out out.fasta]
+//   bg crispr    <file>                   find guides (--enzyme, --offtargets N)
+//   bg crispr-edit <file> <guide>         deterministic NHEJ/HDR simulation
+//   bg crispr-primers <file> <guide>      primers flanking the cut
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -47,6 +50,7 @@ import { alignGlobal, alignLocal, alignPair, alignBanded, dotPlot, dotPlotText, 
 import { assembleContigs } from '../js/contig.js';
 import { callVariants, variantsToFeatures, formatVariant } from '../js/variants.js';
 import { readTrace, trimTrace, qualityStats, traceToDocument } from '../js/traces.js';
+import { findGuides, findOffTargets, guidesToFeatures, nhejEdit, hdrEdit, frameEffectReport, editPrimers } from '../js/crispr.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
@@ -547,7 +551,66 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'align') {
+  } else if (cmd === 'crispr') {
+    const { flags } = splitFlags(rest, ['enzyme', 'guide-len', 'min-gc', 'max-gc', 'offtargets', 'json', 'features', 'out']);
+    const guides = findGuides(doc.seq, {
+      enzyme: flags.enzyme ?? 'SpCas9',
+      guideLength: flags['guide-len'] ? Number(flags['guide-len']) : null,
+      minGC: Number(flags['min-gc'] ?? 20),
+      maxGC: Number(flags['max-gc'] ?? 80),
+      circular: doc.circular,
+      maxOffTargets: flags.offtargets ? Number(flags.offtargets) : null,
+    });
+    if (flags.json) {
+      console.log(JSON.stringify(guides.map((g) => ({ sequence: g.sequence, strand: g.strand, start: g.start, end: g.end, cut: g.cut, pam: g.pam, gc: g.gc, offTargets: g.offTargets })), null, 2));
+    } else {
+      console.log(`${guides.length} guide(s) for ${flags.enzyme ?? 'SpCas9'}`);
+      for (const g of guides.slice(0, 60)) {
+        console.log(`  ${pad(g.sequence, 22)} ${g.strand === 1 ? '+' : '-'} ${pad(num(g.start + 1) + '..' + num(g.end), 16)} PAM ${pad(g.pam, 7)} cut ${num(g.cut + 1)}  GC ${g.gc.toFixed(0)}%`);
+        for (const o of g.offTargets ?? []) console.log(`      off-target ${pad(num(o.start + 1), 8)} ${o.mismatches} mismatch(es), seed ${o.seedMismatches} (heuristic)`);
+      }
+    }
+    if (flags.out) {
+      doc.features = [...doc.features, ...guidesToFeatures(doc, guides)];
+      saveDoc(doc, flags.out);
+      console.log(`Wrote ${flags.out} with ${guides.length} crispr_site feature(s)`);
+    }
+  } else if (cmd === 'crispr-edit') {
+    const { positional, flags } = splitFlags(rest, ['seed', 'hdr', 'deletion', 'replace', 'out', 'json']);
+    const spec = positional.find((p) => !p.startsWith('-'));
+    if (!spec) throw new Error('Usage: bg crispr-edit <file> <guide sequence|start..end> [--nhej --seed N | --hdr DONOR] [--out]');
+    let guide;
+    if (/^\d+\.\.\d+$/.test(spec)) {
+      const m = /^(\d+)\.\.(\d+)$/.exec(spec);
+      const start = Number(m[1]) - 1;
+      const end = Number(m[2]);
+      guide = { sequence: doc.seq.slice(start, end), start, end, cut: Math.max(start, end - 3), strand: 1, pam: '', enzyme: 'custom' };
+    } else {
+      guide = findGuides(doc.seq, { circular: doc.circular, enzyme: flags.enzyme ?? 'SpCas9' }).find((g) => g.sequence === spec.toUpperCase());
+      if (!guide) throw new Error(`Guide ${spec} not found on either strand`);
+    }
+    const result = flags.hdr != null
+      ? hdrEdit(doc, guide, { donor: flags.hdr, replaceLength: Number(flags.replace ?? 0) })
+      : nhejEdit(doc, guide, { seed: Number(flags.seed ?? 1), deletion: flags.deletion != null ? Number(flags.deletion) : null });
+    if (flags.json) console.log(JSON.stringify({ method: result.method, change: result.change, frameEffects: result.frameEffects }, null, 2));
+    else {
+      console.log(`${result.method.toUpperCase()} edit at cut ${result.change.start + 1}`);
+      console.log(`  deleted ${result.change.deleted.length} bp, inserted ${result.change.inserted.length} bp, product ${result.doc.seq.length} bp`);
+      for (const f of result.frameEffects) console.log(`  ${f.name}: ${f.effect}${f.lengthChange != null ? ` (${f.lengthChange > 0 ? '+' : ''}${f.lengthChange} bp)` : ''}`);
+    }
+    if (flags.out) { saveDoc(result.doc, flags.out); console.log(`Wrote ${flags.out}`); }
+  } else if (cmd === 'crispr-primers') {
+    const { positional, flags } = splitFlags(rest, ['arm', 'tm']);
+    const spec = positional.find((p) => !p.startsWith('-'));
+    if (!spec) throw new Error('Usage: bg crispr-primers <file> <guide sequence>');
+    const guide = findGuides(doc.seq, { circular: doc.circular }).find((g) => g.sequence === spec.toUpperCase());
+    if (!guide) throw new Error(`Guide ${spec} not found`);
+    const primers = editPrimers(doc, guide.cut, { arm: Number(flags.arm ?? 40), targetTm: Number(flags.tm ?? 60) });
+    console.log(`forward  ${primers.forward.sequence}  Tm ${primers.forward.tm.toFixed(1)}°C`);
+    console.log(`reverse  ${primers.reverse.sequence}  Tm ${primers.reverse.tm.toFixed(1)}°C`);
+    console.log(`product  ${num(primers.productLength)} bp`);
+  }
+  else if (cmd === 'align') {
     const { positional, flags } = splitFlags(rest, ['band', 'local', 'global', 'json', 'width']);
     const other = positional.find((p) => !p.startsWith('-'));
     if (!other) throw new Error('Usage: bg align <a> <b> [--local] [--band N]');

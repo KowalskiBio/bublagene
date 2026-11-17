@@ -51,6 +51,7 @@ export const FEATURE_CATALOG = {
   '5\'UTR': { label: "5' UTR", icon: 'M5 6h14M5 10h14M5 14h9', color: '#b0a0c0' },
   '3\'UTR': { label: "3' UTR", icon: 'M5 10h9M5 14h14M5 18h14', color: '#b0a0c0' },
   variation: { label: 'Sequence variant', icon: 'M5 12h4l2-6 3 12 2-6h3', color: '#c06a6a' },
+  crispr_site: { label: 'CRISPR guide site', icon: 'M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4', color: '#7a5fb0' },
 };
 
 export const FEATURE_TYPES = Object.keys(FEATURE_CATALOG);
