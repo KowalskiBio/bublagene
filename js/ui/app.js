@@ -8,6 +8,7 @@ import { saveSession, loadSession, clearSession, timeAgo } from './session.js';
 import { readAlignments } from '../formats/bam.js';
 import { readTraces } from '../formats/ztr.js';
 import { traceView } from './traceview.js';
+import { History } from '../undo.js';
 import { PANELS, renderPanel } from './panels.js';
 import { exampleDocument } from './sample.js';
 import { readDna, writeDna } from '../formats/dna.js';
@@ -31,6 +32,7 @@ const state = {
   ladder: '1 kb ladder',
   showTranslation: true,
   showComplement: true,
+  featureFilter: '',
   showReads: true,
   trace: 0,
   pxPerBase: 14,
@@ -64,7 +66,7 @@ async function loadAlignment(doc) {
 
 // ---- remembering the session ------------------------------------------------
 
-const isDirty = (doc) => !!(undo.get(doc.id)?.past.length || doc.restoredDirty);
+const isDirty = (doc) => !!(undo.get(doc.id)?.canUndo?.() || doc.restoredDirty);
 
 let saveTimer = null;
 function rememberSoon() {
@@ -89,6 +91,7 @@ function remember() {
     ladder: state.ladder,
     showTranslation: state.showTranslation,
     showComplement: state.showComplement,
+    featureFilter: state.featureFilter,
     // the undo history is deliberately left behind; only the documents return
     docs: state.docs.map((d) => ({ ...cloneDoc(d), restoredDirty: isDirty(d) })),
   });
@@ -96,7 +99,7 @@ function remember() {
 
 function restoreSession(saved) {
   state.docs = saved.docs ?? [];
-  for (const d of state.docs) undo.set(d.id, { past: [], future: [] });
+  for (const d of state.docs) undo.set(d.id, new History());
   state.active = Math.min(saved.active ?? 0, Math.max(0, state.docs.length - 1));
   state.view = saved.view ?? 'map';
   state.panel = saved.panel ?? 'Features';
@@ -108,6 +111,7 @@ function restoreSession(saved) {
   state.ladder = saved.ladder ?? '1 kb ladder';
   state.showTranslation = saved.showTranslation ?? true;
   state.showComplement = saved.showComplement ?? true;
+  state.featureFilter = saved.featureFilter ?? '';
   state.restorable = null;
   render();
   for (const d of state.docs) loadAlignment(d);
@@ -128,7 +132,7 @@ function openDoc(doc) {
   state.restorable = null; // opening something is an answer to the restore offer
   state.docs.push(doc);
   state.active = state.docs.length - 1;
-  undo.set(doc.id, { past: [], future: [] });
+  undo.set(doc.id, new History());
   state.selection = null;
   state.highlight = null;
   state.digestWith = [];
@@ -162,9 +166,7 @@ function edit(label, mutate) {
   const doc = current();
   if (!doc) return;
   const stack = undo.get(doc.id);
-  stack.past.push(cloneDoc(doc));
-  if (stack.past.length > 60) stack.past.shift();
-  stack.future.length = 0;
+  stack.record(cloneDoc(doc), label, { coalesceKey: label });
   mutate(doc);
   addHistory(doc, 'edit', label);
   render();
@@ -174,11 +176,8 @@ function undoOnce(redo = false) {
   const doc = current();
   if (!doc) return;
   const stack = undo.get(doc.id);
-  const from = redo ? stack.future : stack.past;
-  if (!from.length) return;
-  const to = redo ? stack.past : stack.future;
-  to.push(cloneDoc(doc));
-  const prev = from.pop();
+  const prev = redo ? stack.redo(cloneDoc(doc)) : stack.undo(cloneDoc(doc));
+  if (!prev) return;
   state.docs[state.active] = prev;
   undo.set(prev.id, stack);
   state.selection = null;
@@ -238,6 +237,7 @@ const api = {
   edit,
   openDoc,
   setSelection(sel) { state.selection = sel; render(); },
+  setFeatureFilter(text) { state.featureFilter = text; render(); },
   focusFeature(f) {
     state.highlight = state.highlight === f.id ? null : f.id;
     if (state.highlight) {
@@ -574,8 +574,8 @@ function render() {
   renderView(doc);
   renderStatus(doc);
   renderPanels(doc);
-  el('undoBtn').disabled = !(undo.get(doc?.id)?.past.length);
-  el('redoBtn').disabled = !(undo.get(doc?.id)?.future.length);
+  el('undoBtn').disabled = !(undo.get(doc?.id)?.canUndo?.());
+  el('redoBtn').disabled = !(undo.get(doc?.id)?.canRedo?.());
   el('saveAs').disabled = !doc;
   document.title = doc ? `${doc.name} · BublaGene` : 'BublaGene';
   rememberSoon();

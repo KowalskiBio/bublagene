@@ -30,6 +30,8 @@
 //   bg crispr-edit <file> <guide>         deterministic NHEJ/HDR simulation
 //   bg crispr-primers <file> <guide>      primers flanking the cut
 //   bg fold      <file> [start..end]     bounded MFE structure (--svg out.svg)
+//   bg search    <file> <query>          sequence, feature and qualifier search
+//   bg frames    <file> [start..end]     six-frame translation
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -54,7 +56,8 @@ import { readTrace, trimTrace, qualityStats, traceToDocument } from '../js/trace
 import { findGuides, findOffTargets, guidesToFeatures, nhejEdit, hdrEdit, frameEffectReport, editPrimers } from '../js/crispr.js';
 import { fold, structureToText, structureToSvg } from '../js/fold.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
-import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
+import { gcContent, meltingTemp, translate, sixFrameTranslation, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
+import { searchAll, filterFeatures } from '../js/search.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
 
 const [, , cmd, file, ...rest] = process.argv;
@@ -553,7 +556,29 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'fold') {
+  } else if (cmd === 'search') {
+    const query = rest[0];
+    if (!query) throw new Error('Usage: bg search <file> <query>');
+    const hits = searchAll(doc, query);
+    console.log(`${hits.length} hit(s) for ${JSON.stringify(query)}`);
+    for (const hit of hits.slice(0, 80)) {
+      if (hit.kind === 'sequence') console.log(`  sequence ${hit.strand === 1 ? '+' : '-'} ${num(hit.start + 1)}..${num(hit.end)}`);
+      else console.log(`  ${hit.kind} ${hit.field} ${pad(hit.name, 22)} ${hit.type}  ${hit.text.slice(0, 50)}`);
+    }
+  } else if (cmd === 'frames') {
+    let seq = doc.seq;
+    let where = 'whole sequence';
+    if (rest[0]) {
+      const r = parseRegion(rest[0], L);
+      seq = subseq(doc.seq, r.start, r.end, doc.circular);
+      where = `${r.start + 1}..${r.end}`;
+    }
+    console.log(`${where}: six frames`);
+    for (const f of sixFrameTranslation(seq)) {
+      console.log(`  ${f.strand === 1 ? '+' : '−'}${f.frame}  ${f.protein.slice(0, 120)}${f.protein.length > 120 ? '…' : ''}`);
+    }
+  }
+  else if (cmd === 'fold') {
     const { positional, flags } = splitFlags(rest, ['max-length', 'svg', 'json', 'width']);
     let seq = doc.seq;
     let where = 'whole sequence';

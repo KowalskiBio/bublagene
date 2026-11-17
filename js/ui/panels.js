@@ -4,7 +4,8 @@ import { h, clear, fmt, toast } from './dom.js';
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, overhangLabel, migration, LADDERS } from '../enzymes.js';
 import { findBindingSites, designPrimers, simulatePCR } from '../primers.js';
 import { featureSpan, featureLength, codingSequence, colorFor, FEATURE_TYPES, newId, qualifierText, addHistory } from '../model.js';
-import { gcContent, meltingTemp, translate, revcomp, subseq, rangeLength, findOrfs } from '../seq.js';
+import { gcContent, meltingTemp, translate, sixFrameTranslation, revcomp, subseq, rangeLength, findOrfs } from '../seq.js';
+import { filterFeatures, searchFeatures } from '../search.js';
 import { describeSegments } from '../formats/dna.js';
 
 export const PANELS = ['Features', 'Primers', 'Enzymes', 'Digest', 'File'];
@@ -23,7 +24,13 @@ function features(el, { doc, state, api }) {
   el.append(h('h3', {}, `Features (${doc.features.length})`));
   if (!doc.features.length) el.append(h('p', { class: 'empty' }, 'No features yet. Select part of the sequence and add one.'));
 
-  const sorted = [...doc.features].sort((a, b) => featureSpan(a).start - featureSpan(b).start);
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Filter'), h('input', {
+    id: 'featureFilter', value: state.featureFilter ?? '', placeholder: 'name, type or qualifier',
+    oninput: (e) => api.setFeatureFilter(e.target.value),
+  })));
+  const filtered = filterFeatures(doc, { text: state.featureFilter || null });
+  if (state.featureFilter) el.append(h('p', { class: 'sub' }, `${filtered.length} of ${doc.features.length} feature(s)`));
+  const sorted = [...filtered].sort((a, b) => featureSpan(a).start - featureSpan(b).start);
   for (const f of sorted) {
     const span = featureSpan(f);
     const row = h('div', {
@@ -58,6 +65,18 @@ function features(el, { doc, state, api }) {
     h('select', { id: 'newType' }, FEATURE_TYPES.map((t) => h('option', { value: t }, t)))));
   el.append(h('label', { class: 'field' }, h('span', {}, 'Strand'),
     h('select', { id: 'newStrand' }, [['1', 'forward →'], ['-1', 'reverse ←'], ['0', 'none']].map(([v, t]) => h('option', { value: v }, t)))));
+
+  el.append(h('h3', {}, 'Six-frame translation'));
+  {
+    const region = sel ? api.selectedSequence() : doc.seq.slice(0, 600);
+    const frames = sixFrameTranslation(region);
+    for (const f of frames) {
+      if (!f.protein.length) continue;
+      el.append(h('div', { class: 'row', title: `${f.strand === 1 ? '+' : '−'}${f.frame}` },
+        h('span', { class: 'label mono', style: { fontSize: '11px' } }, `${f.strand === 1 ? '+' : '−'}${f.frame} ${f.protein.slice(0, 120)}`)));
+    }
+    if (region.length < doc.seq.length) el.append(h('p', { class: 'sub' }, 'Select a region to translate just that part.'));
+  }
 
   const orfs = findOrfs(doc.seq, doc.circular, 100);
   el.append(h('h3', {}, `Open reading frames (${orfs.length})`));

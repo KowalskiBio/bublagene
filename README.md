@@ -37,6 +37,12 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Editing that stays reversible.** A coalescing undo/redo history, feature
+  filtering by name/type/qualifier, six-frame translation, and search across
+  sequence and annotations. Browser save/open prefers the File System Access
+  API and falls back to OPFS or a download; autosave snapshots are debounced
+  and readable after a crash; heavy jobs can run in a worker with a local
+  fallback.
 - **RNA structure, bounded on purpose.** A Zuker-style dynamic program over a
   documented Turner subset (Watson–Crick + G·U, stacking, hairpin and simple
   interior/bulge loops) returns energy, pairs and dot-bracket output, with text
@@ -164,6 +170,8 @@ node tools/bg.mjs info plasmid.dna
 | `bg crispr-edit <file> <guide>` | deterministic NHEJ/HDR simulation with frame effects |
 | `bg crispr-primers <file> <guide>` | primers flanking the cut |
 | `bg fold <file> [start..end]` | bounded MFE structure, dot-bracket or SVG |
+| `bg search <file> <query>` | sequence, feature and qualifier search |
+| `bg frames <file> [start..end]` | six-frame translation |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,
