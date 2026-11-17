@@ -200,10 +200,18 @@ function autoShowEnzymes(doc) {
 function closeDoc(i) {
   const doc = state.docs[i];
   if (doc && isDirty(doc) && !confirm(`Close ${doc.name}? Unsaved changes will be lost.`)) return;
+  const wasActive = i === state.active;
   state.docs.splice(i, 1);
   undo.delete(doc?.id);
+  // closing a tab to the left shifts every later tab down; keep the same document open
+  if (i < state.active) state.active -= 1;
   state.active = Math.max(0, Math.min(state.active, state.docs.length - 1));
-  state.selection = null;
+  if (wasActive) {
+    state.selection = null;
+    state.highlight = null;
+    state.selectedFeatures = new Set();
+    state.traceBase = null;
+  }
   render();
 }
 
@@ -216,8 +224,42 @@ function edit(label, mutate) {
   state.alignResult = null;
   state.fold = null;
   state.crispr = null;
+  // a selection that no longer fits the edited sequence would point past its end
+  if (state.selection && (state.selection.end > doc.seq.length || state.selection.start > doc.seq.length)) state.selection = null;
   addHistory(doc, 'edit', label);
   render();
+}
+
+// Replace the selection with typed text. Cancelling the prompt must leave the
+// sequence alone; an empty answer is treated the same way (Delete is for that).
+function replaceSelection() {
+  const sel = state.selection;
+  if (!sel) return;
+  const answer = window.prompt('Replace the selection with:');
+  if (answer === null) return;
+  const seq = cleanSequence(answer);
+  if (!seq) return;
+  edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); });
+  state.selection = { start: sel.start, end: sel.start + seq.length };
+  render();
+}
+
+function deleteSelection() {
+  const sel = state.selection;
+  if (!sel) return;
+  edit('Delete selection', (d) => { replaceRange(d, sel.start, sel.end, ''); });
+  state.selection = null;
+  render();
+}
+
+// A highlighted feature is only "current" while the selection is that feature;
+// once the reader selects something else, or the feature is gone, drop it.
+function syncHighlight() {
+  if (!state.highlight) return;
+  const f = current()?.features.find((x) => x.id === state.highlight);
+  const sel = state.selection;
+  const span = f && featureSpan(f);
+  if (!f || !sel || sel.start !== span.start || sel.end !== span.end) state.highlight = null;
 }
 
 function undoOnce(redo = false) {
@@ -345,7 +387,7 @@ async function openProject() {
 const api = {
   edit,
   openDoc,
-  setSelection(sel) { state.selection = sel; render(); },
+  setSelection(sel) { state.selection = sel; syncHighlight(); render(); },
   setFeatureFilter(text) { state.featureFilter = text; render(); },
   focusFeature(f) {
     state.highlight = state.highlight === f.id ? null : f.id;
@@ -365,7 +407,9 @@ const api = {
     state.digestWith = state.digestWith.includes(name) ? state.digestWith.filter((x) => x !== name) : [...state.digestWith, name];
     render();
   },
-  setAgarose(v) { state.agarose = v; render(); },
+  // quiet: the caller redraws the gel itself, so a slider being dragged is not rebuilt under the pointer
+  setAgarose(v, quiet = false) { state.agarose = v; if (quiet) rememberSoon(); else render(); },
+  clearCrispr() { state.crispr = null; render(); },
   setLadder(v) { state.ladder = v; render(); },
   primerFromSelection(dir) { addPrimerFromSelection(dir); },
   setCloning(patch) { state.cloning = { ...state.cloning, ...patch }; render(); },
@@ -536,7 +580,7 @@ function renderTabs() {
   const box = clear(el('tabs'));
   state.docs.forEach((doc, i) => {
     const dirty = isDirty(doc);
-    box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.highlight = null; state.selectedFeatures = new Set(); state.traceBase = null; render(); } },
+    box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.highlight = null; state.selectedFeatures = new Set(); state.traceBase = null; render(); el('panel').scrollTop = 0; } },
       h('span', { class: 'name' }, doc.name),
       dirty ? h('span', { class: 'dirty', title: 'edited' }, '•') : null,
       h('button', { class: 'close', title: 'Close', onclick: (e) => { e.stopPropagation(); closeDoc(i); } }, '×')));
@@ -554,17 +598,8 @@ function renderViewBar(doc) {
       h('input', { type: 'checkbox', checked: state[key], onchange: (e) => { state[key] = e.target.checked; render(); } }), label));
   }
   const sel = state.selection;
-  ops.append(h('button', {
-    class: 'btn', disabled: !sel,
-    onclick: () => edit('Delete selection', (d) => { replaceRange(d, sel.start, sel.end, ''); }),
-  }, 'Delete'));
-  ops.append(h('button', {
-    class: 'btn', disabled: !sel,
-    onclick: () => {
-      const seq = cleanSequence(prompt?.('Replace the selection with:') ?? '');
-      edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); });
-    },
-  }, 'Replace…'));
+  ops.append(h('button', { class: 'btn', disabled: !sel, onclick: deleteSelection }, 'Delete'));
+  ops.append(h('button', { class: 'btn', disabled: !sel, onclick: replaceSelection }, 'Replace…'));
   ops.append(h('button', {
     class: 'btn', disabled: !sel || !doc.circular,
     title: 'Make the selection start base 1',
@@ -695,14 +730,8 @@ function openContextMenu(ev) {
   items.push({ label: 'Design a primer pair…', disabled: !picked, onClick: () => { state.panel = 'Primers'; render(); } });
   items.push('-');
   items.push({ label: 'Add a feature here', disabled: !sel, onClick: addFeatureFromSelection });
-  items.push({ label: 'Delete selected bases', danger: true, disabled: !sel, onClick: () => edit('Delete selection', (d) => replaceRange(d, sel.start, sel.end, '')) });
-  items.push({
-    label: 'Replace selected bases…', disabled: !sel,
-    onClick: () => {
-      const text = cleanSequence(window.prompt('Replace the selection with:') ?? '');
-      edit('Replace selection', (d) => replaceRange(d, sel.start, sel.end, text));
-    },
-  });
+  items.push({ label: 'Delete selected bases', danger: true, disabled: !sel, onClick: deleteSelection });
+  items.push({ label: 'Replace selected bases…', disabled: !sel, onClick: replaceSelection });
   items.push('-');
   if (doc.circular && sel) items.push({ label: `Start the sequence at ${fmt(sel.start + 1)}`, onClick: () => edit('Set origin', (d) => rotateOrigin(d, sel.start)) });
   items.push({ label: 'Select everything', hint: '⌘A', onClick: () => api.setSelection({ start: 0, end: doc.seq.length }) });
@@ -716,6 +745,7 @@ function renderView(doc) {
   const view = clear(el('view'));
   activeTraceView = null;
   if (!doc) { view.append(welcome()); return; }
+  if (!doc.seq.length && state.view !== 'trace') { view.append(emptyCard(doc)); return; }
   const sites = shownSites(doc);
   const opts = {
     selection: state.selection, sites, highlight: state.highlight,
@@ -788,7 +818,7 @@ function renderView(doc) {
       onSelect: (sel, info) => {
         state.selection = sel;
         renderStatus(doc);
-        if (!info?.live) render();
+        if (!info?.live) { syncHighlight(); render(); }
       },
       showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
       reads: readsFor(doc),
@@ -806,7 +836,7 @@ function renderPanels(doc) {
   for (const name of PANELS) {
     tabs.append(h('button', {
       role: 'tab', 'aria-selected': String(state.panel === name),
-      onclick: () => { state.panel = name; render(); },
+      onclick: () => { state.panel = name; render(); el('panel').scrollTop = 0; },
     }, name));
   }
   const panel = clear(el('panel'));
@@ -816,6 +846,22 @@ function renderPanels(doc) {
     others: state.docs.filter((d) => d.id !== doc.id),
     docs: state.docs,
   }));
+}
+
+// A new document has no bases, and nothing to select, so give it a way in.
+function emptyCard(doc) {
+  const box = h('textarea', { id: 'pasteSeq', rows: 6, placeholder: 'ACGT… or a FASTA record', class: 'mono', style: { width: '100%' } });
+  const add = () => {
+    const text = box.value.replace(/^>.*$/gm, '');
+    const seq = cleanSequence(text);
+    if (!seq) { toast('No bases found in what was pasted', 'error'); return; }
+    edit('Add sequence', (d) => { replaceRange(d, 0, 0, seq); });
+  };
+  return h('div', { class: 'welcome' },
+    h('h1', {}, `${doc.name} is empty`),
+    h('p', {}, 'Paste a sequence to start, or open a file. Spaces, digits and line breaks are ignored.'),
+    h('label', { class: 'field' }, h('span', {}, 'Sequence'), box),
+    h('div', { class: 'group' }, h('button', { class: 'btn primary', onclick: add }, 'Add sequence')));
 }
 
 function welcome() {
@@ -863,8 +909,34 @@ function restoreCard(saved) {
       'Kept in this browser only, never uploaded. “Start fresh” forgets it.'));
 }
 
+// Rebuilding the panels replaces every input in them. Remember which one the
+// reader was typing in, and where the caret was, so a keystroke in the filter
+// box does not end with the focus lost.
+function focusSnapshot() {
+  const a = document.activeElement;
+  if (!a?.id || !(el('panel').contains(a) || el('viewOpts').contains(a) || el('view').contains(a))) return null;
+  const range = typeof a.selectionStart === 'number' ? [a.selectionStart, a.selectionEnd, a.selectionDirection] : null;
+  return { id: a.id, range };
+}
+
+function restoreFocus(snap) {
+  if (!snap) return;
+  const n = document.getElementById(snap.id);
+  if (!n || n === document.activeElement) return;
+  n.focus({ preventScroll: true });
+  try { if (snap.range) n.setSelectionRange(...snap.range); } catch { /* inputs that have no caret, such as a range slider */ }
+}
+
 function render() {
   const doc = current();
+  // drop references to features that were deleted or never existed in this document
+  if (state.highlight && !doc?.features.some((f) => f.id === state.highlight)) state.highlight = null;
+  if (state.selectedFeatures.size) {
+    const ids = new Set(doc?.features.map((f) => f.id));
+    const kept = [...state.selectedFeatures].filter((id) => ids.has(id));
+    if (kept.length !== state.selectedFeatures.size) state.selectedFeatures = new Set(kept);
+  }
+  const snap = focusSnapshot();
   renderTabs();
   const hasTraces = !!traces.get(doc?.id)?.length;
   for (const b of el('viewSeg').querySelectorAll('button')) {
@@ -880,6 +952,7 @@ function render() {
   el('redoBtn').disabled = !(undo.get(doc?.id)?.canRedo?.());
   el('saveAs').disabled = !doc;
   document.title = doc ? `${doc.name} · BublaGene` : 'BublaGene';
+  restoreFocus(snap);
   rememberSoon();
 }
 

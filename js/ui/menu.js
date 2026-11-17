@@ -43,7 +43,9 @@ export function showMenu(x, y, items) {
 addEventListener('pointerdown', (e) => { if (open && !open.contains(e.target)) closeMenu(); }, true);
 addEventListener('keydown', (e) => {
   if (!open) return;
-  if (e.key === 'Escape') { e.preventDefault(); closeMenu(); return; }
+  // Escape closes the menu and nothing else; without stopping it, the page's own
+  // Escape handler would also clear the reader's selection
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeMenu(); return; }
   const items = [...open.querySelectorAll('.item:not([disabled])')];
   const i = items.indexOf(document.activeElement);
   if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus(); }

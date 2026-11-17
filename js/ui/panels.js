@@ -349,10 +349,22 @@ function digestPanel(el, { doc, state, api }) {
   el.append(t);
 
   el.append(h('h3', {}, 'Gel'));
-  const pct = state.agarose;
-  el.append(h('label', { class: 'field' }, h('span', {}, `Agarose ${pct}%`),
-    h('input', { type: 'range', min: 0.5, max: 2, step: 0.1, value: pct, oninput: (e) => api.setAgarose(Number(e.target.value)) })));
-  el.append(gel(bySize.map((f) => f.len), state.ladder, pct));
+  // Redraw only the gel while the slider moves: rebuilding the whole panel would
+  // replace the slider under the pointer and end the drag after one step.
+  const sizes = bySize.map((f) => f.len);
+  const agaroseLabel = h('span', {}, `Agarose ${state.agarose}%`);
+  const gelBox = h('div', {}, gel(sizes, state.ladder, state.agarose));
+  el.append(h('label', { class: 'field' }, agaroseLabel,
+    h('input', {
+      id: 'agarose', type: 'range', min: 0.5, max: 2, step: 0.1, value: state.agarose,
+      oninput: (e) => {
+        const v = Number(e.target.value);
+        api.setAgarose(v, true);
+        agaroseLabel.textContent = `Agarose ${v}%`;
+        clear(gelBox).append(gel(sizes, state.ladder, v));
+      },
+    })));
+  el.append(gelBox);
   el.append(h('label', { class: 'field', style: { marginTop: '8px' } }, h('span', {}, 'Ladder'),
     h('select', { onchange: (e) => api.setLadder(e.target.value) },
       Object.keys(LADDERS).map((k) => h('option', { value: k, selected: k === state.ladder }, k)))));
@@ -476,7 +488,7 @@ function crisprPanel(el, { doc, state, api }) {
   if (current.guides.length) {
     el.append(h('div', { class: 'group' },
       h('button', { class: 'btn', onclick: () => api.addCrisprFeatures() }, 'Add guide features'),
-      h('button', { class: 'btn', onclick: () => api.setFeatureSelection([]) }, 'Clear selection')));
+      h('button', { class: 'btn', onclick: () => api.clearCrispr() }, 'Clear results')));
   }
   for (const g of current.guides.slice(0, 80)) {
     const row = h('div', {
@@ -617,7 +629,10 @@ function file(el, { doc, state, api }) {
   const t = h('table', { class: 'data' });
   t.append(h('tr', {}, h('td', {}, 'Length'), h('td', {}, `${fmt(L)} bp`)));
   t.append(h('tr', {}, h('td', {}, 'GC'), h('td', {}, `${gcContent(doc.seq).toFixed(1)}%`)));
-  for (const b of ['A', 'C', 'G', 'T']) t.append(h('tr', {}, h('td', {}, b), h('td', {}, `${fmt(counts[b])} (${((100 * counts[b]) / L).toFixed(1)}%)`)));
+  for (const b of ['A', 'C', 'G', 'T']) {
+    const pct = L ? ` (${((100 * counts[b]) / L).toFixed(1)}%)` : '';
+    t.append(h('tr', {}, h('td', {}, b), h('td', {}, `${fmt(counts[b])}${pct}`)));
+  }
   if (counts.other) t.append(h('tr', {}, h('td', {}, 'other'), h('td', {}, fmt(counts.other))));
   el.append(t);
 
