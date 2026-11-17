@@ -398,23 +398,27 @@ const api = {
   setAlignTarget(id) { state.alignTarget = id; state.alignResult = null; render(); },
   setAlignLocal(v) { state.alignLocal = v; render(); },
   setAlignBand(v) { state.alignBand = v; render(); },
-  runAlignment() {
+  async runAlignment() {
     const doc = current();
     const others = state.docs.filter((d) => d.id !== doc?.id);
     const target = others.find((d) => d.id === state.alignTarget) ?? others[0];
     if (!doc || !target) return;
     state.alignBusy = true;
     render();
-    setTimeout(() => {
-      try {
-        const result = alignPair(doc.seq, target.seq, { local: state.alignLocal, band: state.alignBand > 0 ? state.alignBand : null });
-        state.alignResult = { docId: doc.id, targetId: target.id, result };
-      } catch (e) {
-        state.alignResult = { docId: doc.id, targetId: target.id, error: e.message };
-      }
-      state.alignBusy = false;
-      render();
-    }, 10);
+    try {
+      const options = { local: state.alignLocal, band: state.alignBand > 0 ? state.alignBand : null };
+      const { result } = await offload(
+        ({ a, b, options: opts }) => alignPair(a, b, opts),
+        { kind: 'align', a: doc.seq, b: target.seq, options },
+        { workerUrl: new URL('../workers/compute-worker.js', import.meta.url) },
+      );
+      if (result?.__error) throw new Error(result.__error);
+      state.alignResult = { docId: doc.id, targetId: target.id, result };
+    } catch (e) {
+      state.alignResult = { docId: doc.id, targetId: target.id, error: e.message };
+    }
+    state.alignBusy = false;
+    render();
   },
   alignmentVariants() {
     const doc = current();
