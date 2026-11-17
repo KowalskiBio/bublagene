@@ -14,6 +14,12 @@
 //   bg overhangs <file> [enzymes]        Type IIS overhangs and compatibility
 //   bg clone     <vector> <insert> <enzyme,...> [out]   restriction cloning
 //   bg gibson    <f1> <f2> [...] [-o out] [--linear]    Gibson assembly
+//   bg assemble  <f1> <f2> ...          N-fragment homology assembly (--plan FILE)
+//   bg golden-gate <f1> <f2> ...        Type IIS assembly (--enzyme BsaI, --plan FILE)
+//   bg assembly-primers <f1> <f2> ...   overlap primers for each fragment
+//   bg plan      <file>                 print and verify an assembly/cloning plan
+//   bg replay    <plan.json>            rebuild a product from its plan
+//   bg batch     <library.json> <designs.json>   many constructs in one run
 //   bg history   <file>                  read the cloning record beside a file
 //   bg translate <file> [start..end] [table]  translate with an NCBI code
 //   bg codons                              list and validate genetic codes
@@ -30,6 +36,7 @@ import { readGenBank, writeGenBank, readFasta, writeFasta } from '../js/formats/
 import { ENZYMES, ENZYME_BY_NAME, COMMON_SET, findSites, digest, cutEnd, overhangLabel, enzymeInfo, enzymesToJSON, enzymesFromJSON, mergeEnzymeSets, uniqueCutters, cuttersByCount, fragmentTable, typeIISOverhangs, overhangMatrix } from '../js/enzymes.js';
 import { findBindingSites, designPrimers, designPrimerPairs, simulatePCR, pcrDiagnostics, gelView } from '../js/primers.js';
 import { restrictionClone, gibsonAssemble, cloningRecord, cloningFromJSON, cloningSidecarName } from '../js/cloning.js';
+import { homologyAssemble, goldenGateAssemble, designAssemblyPrimers, assemblyPlan, assemblyFromJSON, replayAssembly, batchAssembly } from '../js/assembly.js';
 import { codingSequence, featureLength, featureSpan, isCodingSegment, translateFeature, featureTableId, featureProteinMass, recomputeFeatures, qualifierText } from '../js/model.js';
 import { gcContent, meltingTemp, translate, findOrfs, subseq, rangeLength, nucleotideCount } from '../js/seq.js';
 import { TABLE_IDS, CODON_TABLES, validateAllTables } from '../js/codon-tables.js';
@@ -62,7 +69,11 @@ function splitFlags(args, known) {
     const a = args[i];
     if (a.startsWith('--')) {
       const key = a.slice(2);
-      if (known.includes(key)) { flags[key] = args[++i]; continue; }
+      if (known.includes(key)) {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith('--')) { flags[key] = args[++i]; } else { flags[key] = true; }
+        continue;
+      }
       flags[key] = true;
       continue;
     }
@@ -267,6 +278,43 @@ try {
     }
     process.exit(0);
   }
+  if (cmd === 'replay') {
+    if (!file) throw new Error('Usage: bg replay <plan.json>');
+    const plan = assemblyFromJSON(readFileSync(file, 'utf8'));
+    const out = replayAssembly(plan);
+    console.log(`${out.ok ? 'OK' : 'MISMATCH'}: rebuilt ${out.seq.length} bp, digest ${out.digest} (expected ${plan.product.digest})`);
+    if (!out.ok) process.exit(1);
+    process.exit(0);
+  }
+  if (cmd === 'batch') {
+    if (!file) throw new Error('Usage: bg batch <library.json> <designs.json> [--out-dir DIR]');
+    const { positional, flags } = splitFlags(rest, ['out-dir']);
+    const designsPath = positional[0];
+    if (!designsPath) throw new Error('Give a designs JSON file');
+    const rawLib = JSON.parse(readFileSync(file, 'utf8'));
+    const library = {};
+    for (const [name, value] of Object.entries(rawLib)) {
+      if (typeof value === 'string') library[name] = { name, seq: value };
+      else if (value.file) library[name] = load(value.file);
+      else library[name] = { seq: value.seq, name };
+    }
+    const designs = JSON.parse(readFileSync(designsPath, 'utf8'));
+    const batch = batchAssembly(library, Array.isArray(designs) ? designs : designs.designs);
+    if (flags['out-dir']) {
+      const { mkdirSync } = await import('node:fs');
+      mkdirSync(flags['out-dir'], { recursive: true });
+      for (const r of batch.results.filter((x) => x.ok)) {
+        const out = `${flags['out-dir']}/${r.name.replace(/[^\w.-]+/g, '_')}.gb`;
+        writeFileSync(out, writeGenBank(r.doc));
+        writeFileSync(`${flags['out-dir']}/${r.name.replace(/[^\w.-]+/g, '_')}.assembly.json`, `${JSON.stringify(r.plan, null, 2)}\n`);
+      }
+    }
+    console.log(JSON.stringify({
+      ok: batch.ok, failed: batch.failed,
+      results: batch.results.map((r) => ({ name: r.name, ok: r.ok, length: r.doc?.seq.length, error: r.error })),
+    }, null, 2));
+    process.exit(batch.failed ? 1 : 0);
+  }
   if (!file) throw new Error('Give a file to work on');
   const doc = load(file);
   const L = doc.seq.length;
@@ -467,7 +515,58 @@ try {
       console.log(`Wrote ${out}`);
       saveRecord(result.doc, out);
     }
-  } else if (cmd === 'history') {
+  } else if (cmd === 'assemble') {
+    const { positional, flags } = splitFlags(rest, ['min-overlap', 'name', 'plan', 'json', 'linear', 'circular']);
+    const out = positional.find((p) => p.endsWith('.dna') || p.endsWith('.gb') || p.endsWith('.fasta'));
+    let paths = positional.filter((p) => p !== out);
+    if (out) paths = paths.slice(0, -1);
+    const fragments = [doc, ...paths.filter((p) => !p.startsWith('-')).map((p) => load(p))];
+    const result = homologyAssemble(fragments, {
+      circular: !flags.linear, minOverlap: Number(flags['min-overlap'] ?? 15),
+      name: flags.name ?? 'Assembly',
+    });
+    printRecord(result.doc.cloning, `Homology assembly (${fragments.length} fragments)`, result.doc.seq.length, result.warnings, result.doc.features.length);
+    if (flags.json) console.log(JSON.stringify(result.plan, null, 2));
+    if (out) {
+      saveDoc(result.doc, out);
+      console.log(`Wrote ${out}`);
+      saveRecord(result.doc, out);
+    }
+    if (flags.plan) { writeFileSync(flags.plan, `${JSON.stringify(result.plan, null, 2)}\n`); console.log(`Wrote ${flags.plan}`); }
+  } else if (cmd === 'golden-gate' || cmd === 'goldengate') {
+    const { positional, flags } = splitFlags(rest, ['enzyme', 'name', 'plan', 'json', 'linear']);
+    const fragments = [doc, ...positional.filter((p) => !p.startsWith('-')).map((p) => load(p))];
+    const result = goldenGateAssemble(fragments, {
+      circular: !flags.linear, enzyme: flags.enzyme ?? 'BsaI', name: flags.name ?? 'Golden Gate construct',
+    });
+    for (const c of result.checks) console.log(`  ${c.severity}: ${c.message}`);
+    printRecord(result.doc.cloning, `Golden Gate assembly with ${flags.enzyme ?? 'BsaI'}`, result.doc.seq.length, result.warnings, result.doc.features.length);
+    if (flags.json) console.log(JSON.stringify(result.plan, null, 2));
+    if (flags.plan) { writeFileSync(flags.plan, `${JSON.stringify(result.plan, null, 2)}\n`); console.log(`Wrote ${flags.plan}`); }
+  } else if (cmd === 'assembly-primers') {
+    const { positional, flags } = splitFlags(rest, ['overlap', 'tm']);
+    const fragments = [doc, ...positional.filter((p) => !p.startsWith('-')).map((p) => load(p))];
+    const primers = designAssemblyPrimers(fragments, { overlap: Number(flags.overlap ?? 25), targetTm: Number(flags.tm ?? 60) });
+    for (const p of primers) {
+      console.log(`${p.name}`);
+      console.log(`  forward  ${p.forward.sequence}  (tail ${p.forward.tail || '—'}, Tm ${p.forward.tm.toFixed(1)}°C)`);
+      console.log(`  reverse  ${p.reverse.sequence}  (tail ${p.reverse.tail || '—'}, Tm ${p.reverse.tm.toFixed(1)}°C)`);
+    }
+  } else if (cmd === 'plan') {
+    const a = assemblyPlan(doc);
+    const c = cloningRecord(doc);
+    if (a) {
+      console.log(`Assembly plan (${a.method}, ${a.fragments.length} fragments, ${a.product.seqLen} bp)`);
+      for (const j of a.junctions) console.log(`  junction at ${j.position + 1}: ${j.overhang?.length ?? 0} bp ${j.type}, scar ${j.scar ?? '—'}`);
+      console.log(`  product digest ${a.product.digest}`);
+      console.log(`  replay: ${replayAssembly(a).ok ? 'identical' : 'MISMATCH'}`);
+    } else if (c) {
+      printRecord(c, `Cloning record for ${doc.name}`, doc.seq.length);
+    } else {
+      console.log('No assembly or cloning plan on this document.');
+    }
+  }
+  else if (cmd === 'history') {
     const path = cloningSidecarName(file);
     if (!existsSync(path)) throw new Error(`No cloning record beside ${file} (looked for ${path})`);
     const record = cloningFromJSON(readFileSync(path, 'utf8'));

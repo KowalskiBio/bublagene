@@ -37,6 +37,12 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Assembly that scales past two pieces.** Homology assembly joins up to 12
+  fragments (scarless, circular or linear); Golden Gate joins Type IIS fragments
+  by their overhangs. Junction checks cover duplicate overhangs, internal
+  enzyme sites and reading-frame continuity. Every product carries a
+  self-contained `bublagene/assembly/1` plan whose digest replays exactly, and
+  batch assembly builds many constructs from one library.
 - **Enzymes with their real properties.** 94 curated enzymes carry cut offsets,
   overhang type/length, isoschizomers and methylation sensitivity. Custom sets
   are plain JSON (`bublagene/enzymes/1`) that round-trip through the CLI.
@@ -125,6 +131,11 @@ node tools/bg.mjs info plasmid.dna
 | `bg enzymes list\|export\|import` | curated metadata or native custom enzyme sets (JSON) |
 | `bg digest <file> <enzyme,...>` | per-enzyme fragment tables |
 | `bg overhangs <file> [enzymes]` | Type IIS overhangs and the compatibility matrix |
+| `bg assemble <f1> <f2> ...` | N-fragment homology assembly with a replayable plan |
+| `bg golden-gate <f1> <f2> ...` | Type IIS modular assembly (`--enzyme BsaI`) |
+| `bg assembly-primers <f1> <f2> ...` | PCR primers carrying the assembly overlaps |
+| `bg plan <file>` / `bg replay <plan.json>` | inspect or rebuild an assembly plan |
+| `bg batch <library.json> <designs.json>` | many constructs from one fragment library |
 | `bg convert <file> <out.gb\|.fasta\|.dna>` | convert between formats |
 
 Positions are 1-based and inclusive, as in GenBank. Files may be `.dna`,
