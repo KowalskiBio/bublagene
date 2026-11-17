@@ -238,7 +238,7 @@ export function goldenGateAssemble(fragments, {
     method: 'golden-gate',
     created: new Date().toISOString(),
     circular,
-    enzyme: typeof enzyme === 'string' ? enzyme : enzyme.name,
+    enzyme: typeof enzyme === 'string' ? enzyme : /** @type {any} */ (enzyme).name,
     scar,
     product: { name: doc.name, seqLen: doc.seq.length, digest: contentHash(doc.seq) },
     fragments: pieces.map((p, index) => ({
@@ -277,6 +277,7 @@ export function goldenGateAssemble(fragments, {
 
 // ---- junction validation ----------------------------------------------------
 
+/** @param {{doc?:any,plan?:any,enzyme?:any,forbiddenSites?:boolean,allowDuplicateOverhangs?:boolean,frame?:any}} [options] */
 export function validateJunctions({ doc, plan, enzyme = null, forbiddenSites = true, allowDuplicateOverhangs = false, frame = false } = {}) {
   const checks = [];
   const seen = new Map();

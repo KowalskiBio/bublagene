@@ -140,7 +140,7 @@ function readRecord(rec, fileName) {
     } else if (cur && /^ {21}/.test(line)) {
       const body = line.slice(21);
       if (body.startsWith('/')) cur.quals.push(body.slice(1));
-      else if (cur.quals.length) cur.quals[cur.quals.length - 1] += (cur.quals[cur.quals.length - 1].endsWith('-') ? '' : ' ') + body.trim();
+      else if (cur.quals.length) { const last = cur.quals[cur.quals.length - 1]; cur.quals[cur.quals.length - 1] = last + (last.endsWith('-') ? '' : ' ') + body.trim(); }
       else cur.loc += body.trim();
     }
   }
@@ -253,6 +253,76 @@ export function readFasta(text, fileName = 'sequence.fasta') {
     doc.seqEdited = false;
     return doc;
   });
+}
+
+// Streaming FASTA: push chunks, get one document at a time. The record length
+// cap prevents a malformed single record from using unbounded memory.
+export function createFastaParser({ maxRecordLength = 1e9, fileName = 'sequence.fasta' } = {}) {
+  let buffer = '';
+  let header = null;
+  let seq = '';
+  let records = 0;
+  const make = () => {
+    if (header == null) return null;
+    const doc = newDocument({ name: header.split(/\s+/)[0] || 'sequence', seq: cleanSequence(seq), circular: /circular/i.test(header) });
+    doc.notes.description = header;
+    doc.source = { format: 'fasta', fileName };
+    doc.seqEdited = false;
+    records++;
+    return doc;
+  };
+  return {
+    push(chunk) {
+      buffer += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk, { stream: true });
+      const out = [];
+      let nl;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        let line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (line.endsWith('\r')) line = line.slice(0, -1);
+        if (line.startsWith('>')) {
+          const doc = make();
+          if (doc) out.push(doc);
+          header = line.slice(1).trim();
+          seq = '';
+        } else if (line.trim()) {
+          if (header == null) header = fileName.replace(/\.\w+$/, '');
+          seq += line.trim();
+          if (seq.length > maxRecordLength) throw new Error(`FASTA record exceeds ${maxRecordLength} bases`);
+        }
+      }
+      return out;
+    },
+    end() {
+      const out = [];
+      if (buffer) {
+        let line = buffer.replace(/\r$/, '');
+        if (line.startsWith('>')) {
+          const doc = make();
+          if (doc) out.push(doc);
+          header = line.slice(1).trim();
+          seq = '';
+        } else if (line.trim()) {
+          if (header == null) header = fileName.replace(/\.\w+$/, '');
+          seq += line.trim();
+        }
+        buffer = '';
+      }
+      const doc = make();
+      if (doc) out.push(doc);
+      header = null;
+      return out;
+    },
+    get count() { return records; },
+  };
+}
+
+export async function* streamFasta(iterable, options = {}) {
+  const parser = createFastaParser(options);
+  for await (const chunk of iterable) {
+    for (const doc of parser.push(chunk)) yield doc;
+  }
+  for (const doc of parser.end()) yield doc;
 }
 
 export function writeFasta(doc) {

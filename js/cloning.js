@@ -165,13 +165,14 @@ function junctionBetween(leftPiece, rightPiece, position) {
   const problem = ok
     ? null
     : `${describeEnd(a)} cannot join ${describeEnd(b)}${names.length ? ` (${names.join('/')})` : ''}`;
-  return { position, left: a, right: b, compatible: ok, type: a.type, oh: a.oh, enzymes: names, problem };
+  return /** @type {any} */ ({ position, left: a, right: b, compatible: ok, type: a.type, oh: a.oh, enzymes: names, problem });
 }
 
 // ---- checking --------------------------------------------------------------
 
 // Test a vector backbone and an insert in both orientations, without building
 // anything. Answers "will it ligate?", "can it go in backwards?", and sizes.
+/** @param {{backbone?:any,insert?:any,circular?:boolean}} [options] */
 export function checkLigation({ backbone, insert, circular = true } = {}) {
   const b = asPiece(backbone, false);
   const variants = {};
@@ -265,6 +266,7 @@ function provenanceText(inputs, type, circular) {
 
 // Join pieces in the given order. Every junction must be compatible. Used by
 // restriction cloning; Gibson assembly builds its product in gibsonAssemble().
+/** @param {any} pieces @param {{circular?:boolean,name?:string,type?:string,operation?:string,description?:string}} [options] */
 export function assemblePieces(pieces, {
   circular = false, name = null, type = 'restriction', operation = null, description = '',
 } = {}) {
@@ -356,6 +358,7 @@ export function assemblePieces(pieces, {
 
 // Convenience wrapper: pick the insert orientation, then ligate. Fragment ends
 // must be cut; use pieceFromFragment() or { doc, fragment } from digest().
+/** @param {{backbone?:any,insert?:any,circular?:boolean,orientation?:string,name?:string,description?:string}} [options] */
 export function restrictionClone({
   backbone, insert, circular = true, orientation = 'auto', name = null, description = '',
 } = {}) {

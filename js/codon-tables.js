@@ -19,6 +19,7 @@ function codonList() {
 
 const CODONS = codonList();
 
+/** @type {Record<number, [string, string, string[]]>} */
 const RAW = {
   1: ['Standard', 'FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG', ['ATG']],
   2: ['Vertebrate Mitochondrial', 'FFLLSSSSYY**CCWWLLLLPPPPHHQQRRRRIIMMTTTTNNKKSS**VVVVAAAADDEEGGGG', ['ATT', 'ATC', 'ATA', 'ATG', 'GTG']],

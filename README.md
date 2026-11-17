@@ -37,6 +37,10 @@ from the built-in example.
   joins fragments that share terminal overlaps. Products keep a structured
   cloning record in portable JSON.
 - Undo/redo, several files open at once, light and dark themes.
+- **Records cannot silently go stale.** Alignment records store the digest of
+  the sequence they describe and are marked stale by any edit; named indexes
+  and caches key on the same digest. FASTA can be streamed with a per-record
+  memory cap, and simulations use a seeded PRNG.
 - **Portable data out and back.** GFF3, BED, CSV feature tables, a plain-text
   map and SVG/PNG/PDF diagrams; project archives keep sequences, features,
   primers, cloning/assembly records, alignments and settings with stable IDs.
@@ -112,9 +116,14 @@ export PATH=/opt/homebrew/opt/node@24/bin:$PATH
 
 ```bash
 cd bublagene && npm test
+npm run lint       # parse every source file with node --check
+npm run typecheck  # tsc --checkJs over the engines and CLI
+npm run bench      # 5 Mb genome performance budget
 ```
 
-The suite has grown well past its first 37 tests; most run on their own; the `.dna` tests additionally read every
+The suite has grown well past its first 37 tests and now includes property
+tests (fast-check), bounded fuzzing for the binary/text parsers, a 5 Mb
+performance check and three-run CI flake detection. Most run on their own; the `.dna` tests additionally read every
 `.dna` file in a folder you point them at with `DNA_SAMPLES`:
 
 ```bash

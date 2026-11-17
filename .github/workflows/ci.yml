@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Lint (syntax)
+        run: npm run lint
+      - name: Type-check JavaScript (tsc --checkJs)
+        run: npm run typecheck
+      - name: Tests (three runs, zero flakes)
+        run: |
+          npm test
+          npm test
+          npm test
+      - name: Coverage threshold
+        run: npm run test:coverage
+      - name: Performance budget (5 Mb genome)
+        run: npm run bench

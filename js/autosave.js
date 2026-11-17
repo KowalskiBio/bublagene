@@ -4,6 +4,7 @@
 // snapshots and for hosts that prefer a small JSON payload.
 
 export class Autosave {
+  /** @param {{write?:Function,read?:Function,clear?:Function,delay?:number,clock?:Function,timer?:any}} [options] */
   constructor({ write, read, clear, delay = 1500, clock = () => Date.now(), timer = null } = {}) {
     this.write = write;
     this.read = read;

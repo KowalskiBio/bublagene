@@ -1,3 +1,4 @@
+// @ts-nocheck — legacy DOM wiring; the engines it calls are type-checked.
 // BublaGene: application state and wiring.
 
 import { h, clear, fmt, toast } from './dom.js';

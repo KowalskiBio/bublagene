@@ -104,7 +104,7 @@ export function findBindingSites(seq, circular, primer, minAnneal = 15, {
 
 function tailFor(spec, enzyme, extraClamp = 'GC') {
   const site = ENZYME_BY_NAME[spec];
-  const seq = site ? site.site : String(spec ?? '');
+  const seq = String(site ? site.site : spec ?? '');
   const clamp = seq ? extraClamp.slice(0, Math.max(0, 6 - seq.length)) : '';
   return (clamp + seq).toUpperCase();
 }
@@ -243,7 +243,7 @@ export function simulatePCR(doc, fwdSeq, revSeq, {
   const opts = { minAnneal, maxMismatches: allowMismatch ? maxMismatches : 0, threePrimeExact };
   const diag = pcrDiagnostics(doc, fwdSeq, revSeq, opts);
   if (!diag.ok) {
-    const e = new Error(`No product. ${diag.reasons.join(' ')}`);
+    const e = /** @type {any} */ (new Error(`No product. ${diag.reasons.join(' ')}`));
     e.diagnostics = diag;
     throw e;
   }

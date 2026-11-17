@@ -104,6 +104,7 @@ export const THREE_LETTER = {
 
 // translate(dna [, tableId | { table, initiator, stopSymbol }])
 // The default table keeps the historical one-argument behaviour.
+/** @param {string} dna @param {number|{table?:number,transl_table?:number,initiator?:boolean,start?:boolean,stopSymbol?:string}} [options] */
 export function translate(dna, options = DEFAULT_TABLE) {
   if (typeof options === 'number') return translateWithTable(dna, options);
   const opts = options ?? {};

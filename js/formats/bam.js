@@ -161,7 +161,7 @@ export async function readAlignments(doc) {
         reads.push({ ...r, label: m?.name || r.name, trimmedRange: m?.trimmedRange ?? null, ...alignToReference(r) });
       }
     } catch (e) {
-      reads.errors = [...(reads.errors ?? []), e.message];
+      /** @type {any} */ (reads).errors = [...(/** @type {any} */ (reads).errors ?? []), e.message];
     }
   }
   reads.sort((a, b) => a.pos - b.pos || a.label.localeCompare(b.label));

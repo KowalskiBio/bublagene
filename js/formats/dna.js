@@ -322,7 +322,9 @@ const REGENERATED = new Set([0x00, 0x01, 0x05, 0x06, 0x08, 0x09, 0x0a]);
 // Caches the format rebuilds; dropped when the sequence changed so they can't go stale.
 const SEQUENCE_CACHES = new Set([0x02, 0x03]);
 
-export function writeDna(doc, { bindingSitesFor } = {}) {
+/** @param {any} doc @param {{bindingSitesFor?: Function}} [options] */
+export function writeDna(doc, options = {}) {
+  const { bindingSitesFor } = options;
   let flags = doc.flags ?? 0x1e;
   flags = doc.circular ? flags | 1 : flags & ~1;
   const cookie = doc.source?.cookie ?? Uint8Array.from([...COOKIE_MAGIC, 0, 1, 0, 15, 0, 19]);

@@ -24,6 +24,7 @@ function download(data, name, env = globalThis) {
   return { method: 'download', name };
 }
 
+/** @param {{data?:any,name?:string,types?:any,env?:any}} [options] */
 export async function saveDocument({ data, name = 'sequence.gb', types = null, env = globalThis } = {}) {
   if (supportsFileSystemAccess(env)) {
     const handle = await env.showSaveFilePicker({ suggestedName: name, types: types ?? undefined });
@@ -43,6 +44,7 @@ export async function saveDocument({ data, name = 'sequence.gb', types = null, e
   return download(data, name, env);
 }
 
+/** @param {{types?:any,multiple?:boolean,env?:any}} [options] */
 export async function openDocument({ types = null, multiple = false, env = globalThis } = {}) {
   if (supportsFileSystemAccess(env)) {
     const handles = await env.showOpenFilePicker({ multiple, types: types ?? undefined });

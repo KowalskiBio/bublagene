@@ -1,3 +1,4 @@
+// @ts-nocheck — legacy DOM wiring; the engines it calls are type-checked.
 // The inspector panels on the right.
 
 import { h, clear, fmt, toast } from './dom.js';

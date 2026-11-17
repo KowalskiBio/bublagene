@@ -610,7 +610,7 @@ try {
     if (!query) throw new Error('Usage: bg search <file> <query>');
     const hits = searchAll(doc, query);
     console.log(`${hits.length} hit(s) for ${JSON.stringify(query)}`);
-    for (const hit of hits.slice(0, 80)) {
+    for (const hit of /** @type {any[]} */ (hits).slice(0, 80)) {
       if (hit.kind === 'sequence') console.log(`  sequence ${hit.strand === 1 ? '+' : '-'} ${num(hit.start + 1)}..${num(hit.end)}`);
       else console.log(`  ${hit.kind} ${hit.field} ${pad(hit.name, 22)} ${hit.type}  ${hit.text.slice(0, 50)}`);
     }

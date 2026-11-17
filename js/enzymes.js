@@ -246,7 +246,7 @@ export function enzymesToJSON(enzymes = ENZYMES) {
     enzymes: enzymes.map((e) => ({
       name: e.name, site: e.site, top: e.top, bottom: e.bottom,
       type: e.type, overhang: e.overhang, overhangLength: e.overhangLength,
-      methylation: e.methylation ?? [], note: e.note,
+      methylation: e.methylation ?? [], note: /** @type {any} */ (e).note,
     })),
   };
 }
@@ -280,6 +280,7 @@ export function cuttersByCount(seq, circular, enzymes = ENZYMES, count) {
 }
 
 // One row per enzyme: recognition sites and the fragments its digest produces.
+/** @param {any} enzymes @param {any} [extra] */
 export function fragmentTable(seq, circular, enzymes = COMMON_SET, extra = []) {
   return resolveEnzymes(enzymes, extra).map((enzyme) => {
     const sites = findSites(seq, circular, enzyme);

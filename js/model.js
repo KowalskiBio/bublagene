@@ -13,6 +13,7 @@
 
 import { mod, rangeLength, translate, proteinMass } from './seq.js';
 import { isKnownTable, DEFAULT_TABLE } from './codon-tables.js';
+import { markAlignmentStale } from './cache.js';
 
 let nextId = 1;
 export const newId = () => `b${Date.now().toString(36)}${(nextId++).toString(36)}`;
@@ -199,6 +200,7 @@ export function replaceRange(doc, start, end, insert) {
   }
   doc.features = keep;
   doc.seqEdited = true;
+  markAlignmentStale(doc);
   recomputeFeatures(doc);
 }
 
@@ -222,6 +224,7 @@ export function rotateOrigin(doc, p) {
     f.segments = f.segments.map((seg) => ({ ...seg, ...normRange(seg.start - p, rangeLength(seg, L), L) }));
   }
   doc.seqEdited = true;
+  markAlignmentStale(doc);
 }
 
 export function reverseComplementDoc(doc) {
@@ -234,6 +237,7 @@ export function reverseComplementDoc(doc) {
     if (f.strand) f.strand = -f.strand;
   }
   doc.seqEdited = true;
+  markAlignmentStale(doc);
   recomputeFeatures(doc);
 }
 
