@@ -57,10 +57,10 @@ function spread(items, minGap, lo, hi) {
 }
 
 // Stack features that overlap into concentric lanes, so none is hidden.
-function assignLanes(doc, L) {
+function assignLanes(features, L) {
   const taken = [];
   const out = new Map();
-  const ordered = [...doc.features].sort((a, b) => featureSpan(a).start - featureSpan(b).start);
+  const ordered = [...features].sort((a, b) => featureSpan(a).start - featureSpan(b).start);
   for (const f of ordered) {
     const span = featureSpan(f);
     const a0 = angleOf(span.start, L);
@@ -74,14 +74,15 @@ function assignLanes(doc, L) {
 }
 
 export function circularMap(doc, opts = {}) {
-  const { selection, sites = [], highlight, onPick, onPickSite } = opts;
+  const { selection, sites = [], highlight, onPick, onPickSite, overlays = [] } = opts;
+  const features = overlays.length ? [...doc.features, ...overlays] : doc.features;
   const L = doc.seq.length || 1;
   const W = 680;
   const cx = W / 2;
   const cy = W / 2;
   const BAND = 15;          // thickness of a feature arrow
   const LANE = BAND + 4;
-  const { lanes, depth } = assignLanes(doc, L);
+  const { lanes, depth } = assignLanes(features, L);
   const R = 150;            // the backbone, with features stacked outward from it
   const outerR = R + depth * LANE;
   const root = s('svg', { viewBox: `0 0 ${W} ${W}`, width: W, height: W, role: 'img', 'aria-label': `Map of ${doc.name}` });
@@ -114,7 +115,7 @@ export function circularMap(doc, opts = {}) {
 
   // features, as arrows on their own lane
   const labels = [];
-  for (const f of doc.features) {
+  for (const f of features) {
     const lane = lanes.get(f.id) ?? 0;
     const rMid = R + (lane + 0.5) * LANE;
     const rIn = rMid - BAND / 2;
@@ -131,10 +132,11 @@ export function circularMap(doc, opts = {}) {
       const gap = seg.extra?.type === 'gap';
       const path = s('path', {
         d: gap ? arcPath(cx, cy, a0, a1, rMid - 1, rMid + 1) : arcPath(cx, cy, a0, a1, rIn, rOut, arrow),
-        fill: gap ? 'var(--muted)' : (seg.color && seg.color !== 'noColor' ? seg.color : f.color),
+        fill: f.orf ? 'none' : gap ? 'var(--muted)' : (seg.color && seg.color !== 'noColor' ? seg.color : f.color),
         opacity: highlight && highlight !== f.id ? 0.3 : 1,
-        stroke: highlight === f.id ? 'var(--ink)' : 'none',
-        'stroke-width': 1.5,
+        stroke: highlight === f.id ? 'var(--ink)' : f.orf ? 'var(--muted)' : 'none',
+        'stroke-dasharray': f.orf ? '3 2' : null,
+        'stroke-width': f.orf ? 1.2 : 1.5,
         style: 'cursor:pointer',
         'data-feature': f.id,
       });
@@ -143,7 +145,7 @@ export function circularMap(doc, opts = {}) {
       root.append(path);
     }
     const mid = angleOf(span.start, L) + (rangeLength(span, L) / L) * TAU / 2;
-    labels.push({ a: mid, text: f.name, id: f.id, from: R + (lane + 1) * LANE });
+    if (!f.orf) labels.push({ a: mid, text: f.name, id: f.id, from: R + (lane + 1) * LANE });
   }
 
   // enzyme ticks, clear of every feature lane
@@ -182,7 +184,7 @@ export function circularMap(doc, opts = {}) {
         'font-weight': lab.kind === 'site' ? 400 : 600,
       }, lab.text);
       if (lab.kind === 'site' && onPickSite) t.addEventListener('click', () => onPickSite(lab.site));
-      else if (onPick) t.addEventListener('click', () => onPick(doc.features.find((f) => f.id === lab.id)));
+      else if (onPick) t.addEventListener('click', () => onPick(features.find((f) => f.id === lab.id)));
       root.append(t);
     }
   }
@@ -194,14 +196,15 @@ export function circularMap(doc, opts = {}) {
 }
 
 export function linearMap(doc, opts = {}) {
-  const { selection, sites = [], highlight, onPick, onPickSite } = opts;
+  const { selection, sites = [], highlight, onPick, onPickSite, overlays = [] } = opts;
+  const features = overlays.length ? [...doc.features, ...overlays] : doc.features;
   const L = doc.seq.length || 1;
   const W = 900;
   const padX = 52;
   const trackY = 150;
   const innerW = W - padX * 2;
   const x = (p) => padX + (p / L) * innerW;
-  const rows = Math.max(1, Math.min(4, doc.features.length));
+  const rows = Math.max(1, Math.min(4, features.length));
   const H = trackY + 70 + rows * 6;
   const root = s('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': `Map of ${doc.name}` });
 
@@ -219,7 +222,7 @@ export function linearMap(doc, opts = {}) {
   // features on stacked lanes so overlapping ones stay readable
   const lanes = [];
   const placed = [];
-  for (const f of doc.features) {
+  for (const f of features) {
     const span = featureSpan(f);
     const x0 = x(span.start);
     const x1 = x(span.end > span.start ? span.end : L);
@@ -236,7 +239,7 @@ export function linearMap(doc, opts = {}) {
     const d = f.strand === -1
       ? `M${x0 + w} ${y}L${x0 + tip} ${y}L${x0} ${y + 7}L${x0 + tip} ${y + 14}L${x0 + w} ${y + 14}Z`
       : `M${x0} ${y}L${x0 + w - tip} ${y}L${x0 + w} ${y + 7}L${x0 + w - tip} ${y + 14}L${x0} ${y + 14}Z`;
-    g.append(s('path', { d, fill: f.color, stroke: highlight === f.id ? 'var(--ink)' : 'none', 'stroke-width': 1.5 }));
+    g.append(s('path', { d, fill: f.orf ? 'none' : f.color, stroke: highlight === f.id ? 'var(--ink)' : f.orf ? 'var(--muted)' : 'none', 'stroke-dasharray': f.orf ? '3 2' : null, 'stroke-width': f.orf ? 1.2 : 1.5 }));
     g.append(s('text', { x: x0 + w / 2, y: y + (f.strand === -1 ? 26 : -4), 'font-size': 11, 'text-anchor': 'middle', fill: 'var(--ink)' }, f.name));
     g.append(s('title', {}, `${f.name} · ${fmt(featureLength(f, L))} bp`));
     if (onPick) g.addEventListener('click', () => onPick(f));

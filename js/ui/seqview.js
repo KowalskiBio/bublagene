@@ -13,8 +13,10 @@ const LABEL_CH = 5.75; // width of one character at the 10px label size
 const labelWidth = (text) => text.length * LABEL_CH + 8;
 
 export function sequenceView(doc, opts = {}) {
-  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showSixFrame = false, showComplement = true, sites = [], highlight, reads = [] } = opts;
+  const { selection, onSelect, onPick, onPickSite, showTranslation = true, showSixFrame = false, showComplement = true, sites = [], highlight, reads = [], caret = null, overlays = [] } = opts;
   const L = doc.seq.length;
+  // reading frames and primer sites ride along as extra bars
+  const allFeatures = overlays.length ? [...doc.features, ...overlays] : doc.features;
   // The view owns the selection while the pointer is down, so that dragging
   // never has to rebuild this element (which would drop the pointer capture).
   let sel = selection;
@@ -31,7 +33,7 @@ export function sequenceView(doc, opts = {}) {
 
   function featuresOnLine(from, to) {
     const out = [];
-    for (const f of doc.features) {
+    for (const f of allFeatures) {
       for (const seg of f.segments) {
         const len = rangeLength(seg, L);
         if (!len) continue;
@@ -88,6 +90,12 @@ export function sequenceView(doc, opts = {}) {
     return placed;
   }
 
+  // a caret at the very end of a full last line belongs to that line, not a new one
+  function caretLine() {
+    if (caret === L && L > 0 && L % state.perLine === 0) return L / state.perLine - 1;
+    return Math.floor(caret / state.perLine);
+  }
+
   function buildLine(i) {
     const from = i * state.perLine;
     const to = Math.min(L, from + state.perLine);
@@ -130,6 +138,14 @@ export function sequenceView(doc, opts = {}) {
           }));
         }
       }
+    }
+
+    // the insertion point, between two bases
+    if (caret !== null && caret >= 0 && caret <= L && caretLine() === i) {
+      line.append(h('div', {
+        class: 'caret',
+        style: { left: `${NUM_W + (caret - from) * charW - 1}px`, top: `${y}px`, height: `${showComplement ? 34 : 17}px` },
+      }));
     }
 
     line.append(h('div', { class: 'bases', style: { left: `${NUM_W}px`, top: `${y}px` } }, top));
@@ -227,8 +243,9 @@ export function sequenceView(doc, opts = {}) {
         dataset: { feature: f.id },
         style: {
           left: `${left}px`, width: `${width}px`, top: `${y}px`,
-          background: gap ? 'transparent' : f.color,
+          background: gap || f.orf ? 'transparent' : f.color,
           borderTop: gap ? '2px dotted var(--muted)' : 'none',
+          ...(f.orf ? { border: '1px dashed var(--muted)', color: 'var(--muted)', height: '13px' } : {}),
           opacity: dim,
         },
       });
@@ -243,7 +260,7 @@ export function sequenceView(doc, opts = {}) {
           const x = after + need <= lineWidth ? after : Math.max(NUM_W, left - need - 2);
           line.append(h('div', {
             class: 'foutside', title: f.name, dataset: { feature: f.id },
-            style: { left: `${x}px`, top: `${y}px`, color: f.color, opacity: dim },
+            style: { left: `${x}px`, top: `${y}px`, color: f.orf ? 'var(--muted)' : f.color, opacity: dim },
           }, text));
         }
       }
@@ -264,7 +281,7 @@ export function sequenceView(doc, opts = {}) {
       for (let i = first; i <= last && i < total; i++) arr[i]++;
     };
     const pieces = (r) => (r.end > r.start ? [[r.start, r.end]] : [[r.start, L], [0, r.end]]);
-    for (const f of doc.features) {
+    for (const f of allFeatures) {
       for (const seg of f.segments) {
         if (!rangeLength(seg, L)) continue;
         for (const [a, b] of pieces(seg)) mark(a, b, bars);
@@ -363,14 +380,15 @@ export function sequenceView(doc, opts = {}) {
     if (!next && clicked) {
       const fid = clicked.getAttribute('data-feature');
       if (fid) {
-        const f = doc.features.find((x) => x.id === fid);
+        const f = allFeatures.find((x) => x.id === fid);
         if (f && onPick) { onPick(f); return; }
       }
       const idx = clicked.getAttribute('data-site');
       if (idx !== null && sites[Number(idx)] && onPickSite) { onPickSite(sites[Number(idx)]); return; }
     }
     wrap.setSelection(next);
-    onSelect?.(next, { live: false });
+    // a click that did not drag leaves the insertion point there
+    onSelect?.(next, { live: false, caret: next ? null : posAt(ev) });
   };
   wrap.addEventListener('pointerup', finish);
   wrap.addEventListener('pointercancel', finish);

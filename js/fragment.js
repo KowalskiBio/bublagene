@@ -3,6 +3,8 @@
 import { featuresInRegion, newId, featureSpan, normRange, replaceRange } from './model.js';
 import { rangeLength, subseq, mod } from './seq.js';
 
+export const FEATURE_CLIP_KIND = 'bublagene/features/1';
+
 // Capture the bases and the features fully inside a selection.
 export function extractFragment(doc, range, name = null) {
   if (!range) return null;
@@ -60,4 +62,51 @@ export function selectedSpans(doc, features) {
     else out.push({ ...s });
   }
   return out;
+}
+
+// ---- feature clipboard -------------------------------------------------------
+
+// Copy the annotations of some features, not their bases. Positions are kept
+// relative to the earliest feature, so the group can be pasted anywhere.
+export function copyFeatures(doc, ids) {
+  const L = doc.seq.length;
+  const wanted = new Set(ids);
+  const picked = doc.features.filter((f) => wanted.has(f.id));
+  if (!picked.length || !L) return null;
+  const origin = Math.min(...picked.map((f) => featureSpan(f).start));
+  const features = picked.map((f) => {
+    const copy = structuredClone(f);
+    copy.segments = f.segments.map((seg) => {
+      const { start, end, ...rest } = structuredClone(seg);
+      return { ...rest, offset: mod(seg.start - origin, L), length: rangeLength(seg, L) };
+    });
+    delete copy.id;
+    return copy;
+  });
+  return { kind: FEATURE_CLIP_KIND, origin, features };
+}
+
+// Put copied features down with their first base at `at`. A feature that would
+// run off the end of a linear sequence is skipped rather than cut short.
+export function pasteFeatures(doc, at, clip) {
+  if (clip?.kind !== FEATURE_CLIP_KIND || !clip.features?.length) throw new Error('No features to paste');
+  const L = doc.seq.length;
+  if (!L) throw new Error('There is no sequence to annotate');
+  const base = doc.circular ? mod(at, L) : Math.max(0, Math.min(L, at));
+  let added = 0;
+  let skipped = 0;
+  for (const f of clip.features) {
+    const segments = [];
+    let fits = true;
+    for (const { offset, length, ...rest } of f.segments) {
+      if (length <= 0 || length > L) { fits = false; break; }
+      if (doc.circular) segments.push({ ...rest, ...normRange(base + offset, length, L) });
+      else if (base + offset + length > L) { fits = false; break; }
+      else segments.push({ ...rest, start: base + offset, end: base + offset + length });
+    }
+    if (!fits || !segments.length) { skipped++; continue; }
+    doc.features.push({ ...structuredClone(f), id: newId(), segments });
+    added++;
+  }
+  return { added, skipped };
 }

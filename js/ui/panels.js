@@ -68,10 +68,19 @@ function features(el, { doc, state, api }) {
     el.append(h('h3', {}, `Selected (${selected.length})`));
     el.append(h('div', { class: 'group' },
       h('button', { class: 'btn', onclick: () => api.copySelectedFeatures() }, 'Copy sequences'),
+      h('button', { class: 'btn', title: 'Copy the annotations, to paste elsewhere', onclick: () => api.copyFeatureAnnotations() }, 'Copy features'),
+      h('button', { class: 'btn', title: 'Copy the annotations and remove them here', onclick: () => api.cutFeatureAnnotations() }, 'Cut features'),
       h('button', { class: 'btn', onclick: () => api.setFeatureSelection(doc.features.map((f) => f.id)) }, 'Select all'),
       h('button', { class: 'btn', danger: true, onclick: () => api.deleteSelectedFeatures() }, 'Delete selected'),
       h('button', { class: 'btn', onclick: () => api.setFeatureSelection([]) }, 'Clear')));
     el.append(h('p', { class: 'sub' }, '⌘-click rows to add or remove them; drag a row onto another to reorder the list.'));
+  }
+
+  if (state.featureClip) {
+    const n = state.featureClip.features.length;
+    const where = sel ? fmt(sel.start + 1) : state.caret !== null && state.caret !== undefined ? fmt(state.caret + 1) : 'where they were copied from';
+    el.append(h('div', { class: 'group', style: { marginTop: '8px' } },
+      h('button', { class: 'btn', onclick: () => api.pasteFeatureAnnotations() }, `Paste ${n} feature${n === 1 ? '' : 's'} at ${where}`)));
   }
 
   el.append(h('h3', {}, 'Add'));
@@ -113,8 +122,12 @@ function features(el, { doc, state, api }) {
     el.append(h('div', {
       class: 'row', onclick: () => api.setSelection({ start: o.start, end: o.end }),
     },
-      h('span', { class: 'label mono' }, `${o.strand === 1 ? '→' : '←'} ${fmt(o.start + 1)}–${fmt(o.end)}`),
-      h('span', { class: 'meta' }, `${fmt(o.codons)} codons`)));
+      h('span', { class: 'label mono' }, `${o.strand === 1 ? '→' : '←'} ${fmt(o.start + 1)}–${fmt(o.end || L)}`),
+      h('span', { class: 'meta' }, `${fmt(o.codons)} codons`),
+      h('button', {
+        class: 'btn', style: { padding: '1px 7px', fontSize: '12px' }, title: 'Add this reading frame as a CDS feature',
+        onclick: (e) => { e.stopPropagation(); api.addOrfAsCds(o); },
+      }, '+ CDS')));
   }
 }
 
@@ -309,11 +322,63 @@ function enzymes(el, { doc, state, api }) {
   }
   el.append(t);
 
-  el.append(h('h3', {}, 'Enzyme set'));
-  el.append(h('div', { class: 'group' },
-    h('button', { class: 'btn', onclick: () => api.setEnzymeSet(COMMON_SET) }, `Common (${COMMON_SET.length})`),
-    h('button', { class: 'btn', onclick: () => api.setEnzymeSet(ENZYMES.map((e) => e.name)) }, `All (${ENZYMES.length})`)));
+  enzymeSetControls(el, { doc, state, api });
 }
+
+// Which enzymes are on offer: a saved set, or a hand-picked one.
+const sameSet = (a, b) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
+
+function enzymeSetControls(el, { doc, state, api }) {
+  el.append(h('h3', {}, 'Enzyme set'));
+  const custom = api.enzymeSets();
+  const all = ENZYMES.map((e) => e.name);
+  const choices = [['Common', COMMON_SET], ['All', all], ...Object.entries(custom)];
+  const here = choices.find(([, names]) => sameSet(names, state.enzymeSet));
+  const select = h('select', {
+    id: 'enzymeSetPick',
+    onchange: (e) => {
+      const picked = choices.find(([name]) => name === e.target.value);
+      if (picked) api.setEnzymeSet([...picked[1]]);
+    },
+  },
+  ...choices.map(([name, names]) => h('option', { value: name, selected: here?.[0] === name }, `${name} (${names.length})`)),
+  here ? null : h('option', { value: '', selected: true }, `Hand-picked (${state.enzymeSet.length})`));
+  el.append(h('label', { class: 'field' }, h('span', {}, 'Offered on the map and in the digest'), select));
+  el.append(h('div', { class: 'group' },
+    h('button', { class: 'btn', onclick: () => api.setEnzymeEdit(!state.enzymeEdit) }, state.enzymeEdit ? 'Done editing' : 'Edit this set…'),
+    here && custom[here[0]] ? h('button', { class: 'btn', onclick: () => api.deleteEnzymeSet(here[0]) }, `Delete “${here[0]}”`) : null));
+  if (!state.enzymeEdit) return;
+
+  const q = (state.enzymeFilter ?? '').trim().toLowerCase();
+  el.append(h('label', { class: 'field', style: { marginTop: '10px' } }, h('span', {}, 'Find an enzyme by name or site'),
+    h('input', { id: 'enzymeFilter', value: state.enzymeFilter ?? '', placeholder: 'e.g. EcoRI or GAATTC', oninput: (e) => api.setEnzymeFilter(e.target.value) })));
+  const inSet = new Set(state.enzymeSet);
+  const matches = ENZYMES.filter((e) => !q || e.name.toLowerCase().includes(q) || e.site.toLowerCase().includes(q))
+    // members first, so the current set is easy to see and prune
+    .sort((a, b) => (inSet.has(b.name) - inSet.has(a.name)) || a.name.localeCompare(b.name));
+  const LIMIT = 60;
+  const list = h('div', { style: { maxHeight: '260px', overflow: 'auto', border: '1px solid var(--line)', borderRadius: '7px' } });
+  for (const e of matches.slice(0, LIMIT)) {
+    const cuts = findSites(doc.seq, doc.circular, e).length;
+    list.append(h('label', { class: 'row', style: { cursor: 'pointer' } },
+      h('input', { type: 'checkbox', checked: inSet.has(e.name), onchange: () => api.toggleEnzymeInSet(e.name) }),
+      h('span', { class: 'label' }, e.name),
+      h('span', { class: 'meta mono' }, e.site),
+      h('span', { class: 'meta' }, cuts ? `${cuts}×` : '–')));
+  }
+  if (!matches.length) list.append(h('p', { class: 'empty' }, 'No enzyme matches.'));
+  el.append(list);
+  if (matches.length > LIMIT) el.append(h('p', { class: 'sub' }, `Showing ${LIMIT} of ${matches.length}; type to narrow it down.`));
+  el.append(h('div', { class: 'group', style: { marginTop: '8px' } },
+    h('button', {
+      class: 'btn',
+      onclick: () => { const name = window.prompt('Name this set:'); if (name) api.saveEnzymeSet(name); },
+    }, 'Save as…'),
+    h('button', { class: 'btn', onclick: () => api.setEnzymeSet([]) }, 'Clear'),
+    h('button', { class: 'btn', onclick: () => api.setEnzymeSet(rowsThatCut(doc)) }, 'Only cutters of this sequence')));
+}
+
+const rowsThatCut = (doc) => ENZYMES.filter((e) => findSites(doc.seq, doc.circular, e).length).map((e) => e.name);
 
 // ---- Digest -----------------------------------------------------------------
 

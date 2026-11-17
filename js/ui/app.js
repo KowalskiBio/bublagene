@@ -23,10 +23,11 @@ import { alignPair } from '../align.js';
 import { callVariants, variantsToFeatures } from '../variants.js';
 import { findGuides, guidesToFeatures, nhejEdit, hdrEdit, editPrimers } from '../crispr.js';
 import { fold, structureToSvg } from '../fold.js';
-import { extractFragment, pasteFragment, reorderFeature } from '../fragment.js';
+import { extractFragment, pasteFragment, reorderFeature, copyFeatures, pasteFeatures } from '../fragment.js';
 import { offload } from '../compute.js';
 import { saveDocument, openDocument, supportsFileSystemAccess, writeAutosave, readAutosave } from '../storage.js';
 import { projectToJSON, projectFromJSON } from '../project.js';
+import { orfsFor, orfFeatures, primerOverlays, isOrf, isPrimer, isOverlay } from './overlays.js';
 
 const state = {
   docs: [],
@@ -34,14 +35,20 @@ const state = {
   view: 'map',
   panel: 'Features',
   selection: null,
+  caret: null,        // insertion point in the sequence view, when nothing is selected
   highlight: null,
   enzymeSet: COMMON_SET,
+  enzymeEdit: false,   // the set editor is open in the Enzymes panel
+  enzymeFilter: '',
   shownEnzymes: new Set(),
   digestWith: [],
   agarose: 1,
   ladder: '1 kb ladder',
   showTranslation: true,
   showSixFrame: false,
+  showOrfs: false,
+  showPrimers: true,
+  orfMin: 100,
   showComplement: true,
   featureFilter: '',
   showReads: true,
@@ -56,6 +63,7 @@ const state = {
   crispr: null,
   fold: null,
   clipboard: null,
+  featureClip: null,   // annotations copied from the Features panel
   pxPerBase: 14,
   cloning: {
     mode: 'restriction',
@@ -69,6 +77,22 @@ const state = {
   restorable: null, // a saved session found on startup, until the user answers
 };
 
+// Named enzyme sets the reader has saved. They live in this browser only.
+const SETS_KEY = 'bublagene.enzymeSets';
+function loadEnzymeSets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SETS_KEY) ?? '{}');
+    const out = {};
+    for (const [name, list] of Object.entries(raw ?? {})) {
+      if (Array.isArray(list)) out[name] = list.filter((n) => ENZYME_BY_NAME[n]);
+    }
+    return out;
+  } catch { return {}; }
+}
+function storeEnzymeSets(sets) {
+  try { localStorage.setItem(SETS_KEY, JSON.stringify(sets)); return true; } catch { return false; }
+}
+
 const undo = new Map(); // doc id -> {past: [], future: []}
 // Aligned reads are decoded from the file's own bytes rather than stored on the
 // document, so they are never written to the session or saved back.
@@ -76,6 +100,15 @@ const alignments = new Map(); // doc id -> reads
 const traces = new Map();     // doc id -> chromatograms
 const traceMaps = new Map();   // doc id -> { key, map }
 let activeTraceView = null;
+
+// ORFs and primer sites to draw on top of the document's own features
+const overlaysFor = (doc) => {
+  if (!doc) return [];
+  return [
+    ...(state.showOrfs ? orfFeatures(orfsFor(doc, state.orfMin)) : []),
+    ...(state.showPrimers ? primerOverlays(doc) : []),
+  ];
+};
 
 const readsFor = (doc) => (doc && state.showReads ? alignments.get(doc.id) ?? [] : []);
 
@@ -123,6 +156,9 @@ function remember() {
     ladder: state.ladder,
     showTranslation: state.showTranslation,
     showSixFrame: state.showSixFrame,
+    showOrfs: state.showOrfs,
+    showPrimers: state.showPrimers,
+    orfMin: state.orfMin,
     showComplement: state.showComplement,
     featureFilter: state.featureFilter,
     // the undo history is deliberately left behind; only the documents return
@@ -153,6 +189,9 @@ function restoreSession(saved) {
   state.ladder = saved.ladder ?? '1 kb ladder';
   state.showTranslation = saved.showTranslation ?? true;
   state.showSixFrame = saved.showSixFrame ?? false;
+  state.showOrfs = saved.showOrfs ?? false;
+  state.showPrimers = saved.showPrimers ?? true;
+  state.orfMin = saved.orfMin ?? 100;
   state.showComplement = saved.showComplement ?? true;
   state.featureFilter = saved.featureFilter ?? '';
   state.restorable = null;
@@ -177,6 +216,7 @@ function openDoc(doc) {
   state.active = state.docs.length - 1;
   undo.set(doc.id, new History());
   state.selection = null;
+  state.caret = null;
   state.highlight = null;
   state.selectedFeatures = new Set();
   state.traceBase = null;
@@ -208,6 +248,7 @@ function closeDoc(i) {
   state.active = Math.max(0, Math.min(state.active, state.docs.length - 1));
   if (wasActive) {
     state.selection = null;
+    state.caret = null;
     state.highlight = null;
     state.selectedFeatures = new Set();
     state.traceBase = null;
@@ -226,6 +267,7 @@ function edit(label, mutate) {
   state.crispr = null;
   // a selection that no longer fits the edited sequence would point past its end
   if (state.selection && (state.selection.end > doc.seq.length || state.selection.start > doc.seq.length)) state.selection = null;
+  if (state.caret !== null && state.caret > doc.seq.length) state.caret = doc.seq.length;
   addHistory(doc, 'edit', label);
   render();
 }
@@ -252,6 +294,72 @@ function deleteSelection() {
   render();
 }
 
+// ---- typing at the caret ----------------------------------------------------
+
+const BASE_KEY = /^[acgtunrykmswbdhv]$/i;
+
+// Put text where the reader is: over the selection if there is one, else at
+// the caret. Returns false when there is nowhere to put it.
+function insertAtCaret(text, label = 'Type bases') {
+  const doc = current();
+  const sel = state.selection;
+  if (!doc || !text) return false;
+  const at = sel ? sel.start : state.caret;
+  if (at === null || at === undefined) return false;
+  const wraps = !!sel && sel.end < sel.start; // a wrapping selection rotates the origin to its start
+  edit(label, (d) => { replaceRange(d, at, sel ? sel.end : at, text); });
+  state.selection = null;
+  state.caret = (wraps ? 0 : at) + text.length;
+  render();
+  return true;
+}
+
+// Backspace (dir -1) and Delete (dir +1)
+function deleteAtCaret(dir) {
+  const doc = current();
+  if (!doc) return false;
+  if (state.selection) { deleteSelection(); return true; }
+  const at = state.caret;
+  if (at === null) return false;
+  const from = dir < 0 ? at - 1 : at;
+  if (from < 0 || from + 1 > doc.seq.length) return true; // at an end: nothing to remove
+  edit('Delete bases', (d) => { replaceRange(d, from, from + 1, ''); });
+  state.caret = from;
+  render();
+  return true;
+}
+
+// Arrow keys move the insertion point; with Shift they grow a selection from it.
+function moveCaret(key, shift) {
+  const doc = current();
+  if (!doc) return false;
+  const L = doc.seq.length;
+  const sel = state.selection;
+  const step = key === 'ArrowLeft' ? -1 : key === 'ArrowRight' ? 1 : key === 'Home' ? -Infinity : Infinity;
+  if (shift) {
+    // the moving edge is the one away from where the selection began
+    const anchor = state.selAnchor ?? (sel ? sel.start : state.caret);
+    if (anchor === null || anchor === undefined) return false;
+    const head = Math.max(0, Math.min(L, (state.selHead ?? (sel ? sel.end : state.caret)) + step));
+    state.selAnchor = anchor;
+    state.selHead = head;
+    state.selection = head === anchor ? null : { start: Math.min(anchor, head), end: Math.max(anchor, head) };
+    state.caret = state.selection ? null : head;
+  } else {
+    let at;
+    if (sel) at = step < 0 ? sel.start : sel.end;
+    else if (state.caret !== null) at = Math.max(0, Math.min(L, state.caret + step));
+    else return false;
+    state.selection = null;
+    state.selAnchor = null;
+    state.selHead = null;
+    state.caret = at;
+  }
+  syncHighlight();
+  render();
+  return true;
+}
+
 // A highlighted feature is only "current" while the selection is that feature;
 // once the reader selects something else, or the feature is gone, drop it.
 function syncHighlight() {
@@ -271,6 +379,7 @@ function undoOnce(redo = false) {
   state.docs[state.active] = prev;
   undo.set(prev.id, stack);
   state.selection = null;
+  state.caret = null;
   state.selectedFeatures = new Set();
   render();
 }
@@ -387,7 +496,7 @@ async function openProject() {
 const api = {
   edit,
   openDoc,
-  setSelection(sel) { state.selection = sel; syncHighlight(); render(); },
+  setSelection(sel) { state.selection = sel; state.selAnchor = null; state.selHead = null; if (sel) state.caret = null; syncHighlight(); render(); },
   setFeatureFilter(text) { state.featureFilter = text; render(); },
   focusFeature(f) {
     state.highlight = state.highlight === f.id ? null : f.id;
@@ -402,7 +511,37 @@ const api = {
     render();
   },
   showEnzymes(names) { state.shownEnzymes = new Set(names); render(); },
-  setEnzymeSet(names) { state.enzymeSet = names; render(); },
+  setEnzymeSet(names) {
+    state.enzymeSet = names;
+    // an enzyme that left the set cannot be hidden from the Enzymes panel any more, so stop drawing it
+    state.shownEnzymes = new Set([...state.shownEnzymes].filter((n) => names.includes(n)));
+    state.digestWith = state.digestWith.filter((n) => names.includes(n));
+    render();
+  },
+  enzymeSets() { return loadEnzymeSets(); },
+  toggleEnzymeInSet(name) {
+    const has = state.enzymeSet.includes(name);
+    api.setEnzymeSet(has ? state.enzymeSet.filter((n) => n !== name) : [...state.enzymeSet, name]);
+  },
+  setEnzymeEdit(on) { state.enzymeEdit = on; render(); },
+  setEnzymeFilter(text) { state.enzymeFilter = text; render(); },
+  saveEnzymeSet(name) {
+    const clean = String(name ?? '').trim();
+    if (!clean || /^(common|all)\b/i.test(clean)) { toast('Give the set a name other than Common or All', 'error'); return; }
+    if (!state.enzymeSet.length) { toast('Pick at least one enzyme first', 'error'); return; }
+    const sets = loadEnzymeSets();
+    sets[clean] = [...state.enzymeSet];
+    if (!storeEnzymeSets(sets)) { toast('This browser would not keep the set', 'error'); return; }
+    toast(`Saved “${clean}” (${state.enzymeSet.length} enzymes)`);
+    render();
+  },
+  deleteEnzymeSet(name) {
+    const sets = loadEnzymeSets();
+    if (!(name in sets)) return;
+    delete sets[name];
+    storeEnzymeSets(sets);
+    render();
+  },
   toggleDigest(name) {
     state.digestWith = state.digestWith.includes(name) ? state.digestWith.filter((x) => x !== name) : [...state.digestWith, name];
     render();
@@ -415,6 +554,18 @@ const api = {
   setCloning(patch) { state.cloning = { ...state.cloning, ...patch }; render(); },
   selectedSequence() { return selectedSeq(); },
   copy(text, what) { copy(text, what); },
+  addOrfAsCds(o) {
+    const id = newId();
+    state.panel = 'Features';
+    state.highlight = id;
+    state.selection = { start: o.start, end: o.end };
+    edit(`Add CDS ${o.start + 1}–${o.end || current().seq.length}`, (d) => {
+      d.features.push({
+        id, name: `ORF ${o.codons} aa`, type: 'CDS', strand: o.strand, color: colorFor('CDS'),
+        segments: [{ start: o.start, end: o.end }], qualifiers: [], extra: {},
+      });
+    });
+  },
   featureSequence(f) { const doc = current(); return doc ? featureSequence(doc, f) : ''; },
   toggleFeatureSelected(id) {
     state.selectedFeatures.has(id) ? state.selectedFeatures.delete(id) : state.selectedFeatures.add(id);
@@ -436,6 +587,40 @@ const api = {
     copy(picked.map((f) => `>${f.name}\n${featureSequence(doc, f)}`).join('\n'), 'feature sequences');
   },
   reorderFeature(id, beforeId) { edit('Reorder features', (d) => reorderFeature(d, id, beforeId)); },
+  copyFeatureAnnotations(ids = null) {
+    const doc = current();
+    if (!doc) return false;
+    const pick = ids ?? (state.selectedFeatures.size ? [...state.selectedFeatures] : state.highlight ? [state.highlight] : []);
+    const clip = copyFeatures(doc, pick);
+    if (!clip) { toast('Tick the features to copy first', 'error'); return false; }
+    state.featureClip = clip;
+    toast(`Copied ${clip.features.length} feature${clip.features.length === 1 ? '' : 's'}`);
+    render();
+    return true;
+  },
+  cutFeatureAnnotations() {
+    const doc = current();
+    if (!doc) return;
+    const ids = state.selectedFeatures.size ? [...state.selectedFeatures] : state.highlight ? [state.highlight] : [];
+    if (!api.copyFeatureAnnotations(ids)) return;
+    const gone = new Set(ids);
+    edit('Cut features', (d) => { d.features = d.features.filter((f) => !gone.has(f.id)); });
+    state.selectedFeatures = new Set();
+    render();
+  },
+  pasteFeatureAnnotations() {
+    const doc = current();
+    const clip = state.featureClip;
+    if (!doc || !clip) return;
+    const at = state.selection?.start ?? state.caret ?? clip.origin;
+    let result;
+    try {
+      edit('Paste features', (d) => { result = pasteFeatures(d, at, clip); });
+    } catch (e) { toast(e.message, 'error'); return; }
+    toast(result.skipped
+      ? `Pasted ${result.added}; ${result.skipped} would run past the end`
+      : `Pasted ${result.added} feature${result.added === 1 ? '' : 's'}`);
+  },
   copyFragment() {
     const doc = current();
     if (!doc || !state.selection) return;
@@ -445,7 +630,7 @@ const api = {
   pasteFragment() {
     const doc = current();
     if (!doc || !state.clipboard) return;
-    const at = state.selection?.start ?? 0;
+    const at = state.selection?.start ?? state.caret ?? 0;
     edit('Paste fragment', (d) => pasteFragment(d, at, state.clipboard));
     toast(`Pasted ${fmt(state.clipboard.seq.length)} bp`);
   },
@@ -580,7 +765,7 @@ function renderTabs() {
   const box = clear(el('tabs'));
   state.docs.forEach((doc, i) => {
     const dirty = isDirty(doc);
-    box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.highlight = null; state.selectedFeatures = new Set(); state.traceBase = null; render(); el('panel').scrollTop = 0; } },
+    box.append(h('div', { class: 'tab', role: 'tab', 'aria-selected': String(i === state.active), onclick: () => { state.active = i; state.selection = null; state.caret = null; state.highlight = null; state.selectedFeatures = new Set(); state.traceBase = null; render(); el('panel').scrollTop = 0; } },
       h('span', { class: 'name' }, doc.name),
       dirty ? h('span', { class: 'dirty', title: 'edited' }, '•') : null,
       h('button', { class: 'close', title: 'Close', onclick: (e) => { e.stopPropagation(); closeDoc(i); } }, '×')));
@@ -591,11 +776,20 @@ function renderViewBar(doc) {
   const opts = clear(el('viewOpts'));
   const ops = clear(el('editOps'));
   if (!doc) return;
-  const toggles = [['showComplement', 'Both strands'], ['showTranslation', 'Translation'], ['showSixFrame', 'Six frames']];
+  const toggles = [['showComplement', 'Both strands'], ['showTranslation', 'Translation'], ['showSixFrame', 'Six frames'], ['showOrfs', 'ORFs']];
+  if (doc.primers.length) toggles.push(['showPrimers', 'Primers']);
   if (alignments.get(doc.id)?.length) toggles.push(['showReads', `Reads (${alignments.get(doc.id).length})`]);
   for (const [key, label] of toggles) {
     opts.append(h('label', { class: 'sub', style: { display: 'flex', gap: '4px', alignItems: 'center' } },
       h('input', { type: 'checkbox', checked: state[key], onchange: (e) => { state[key] = e.target.checked; render(); } }), label));
+  }
+  if (state.showOrfs) {
+    opts.append(h('label', { class: 'sub', style: { display: 'flex', gap: '4px', alignItems: 'center' }, title: 'Shortest reading frame to draw, in codons' },
+      'min',
+      h('input', {
+        id: 'orfMin', type: 'number', min: 20, max: 2000, step: 10, value: state.orfMin, style: { width: '64px', padding: '2px 5px' },
+        onchange: (e) => { state.orfMin = Math.max(20, Number(e.target.value) || 100); render(); },
+      }), 'aa'));
   }
   const sel = state.selection;
   ops.append(h('button', { class: 'btn', disabled: !sel, onclick: deleteSelection }, 'Delete'));
@@ -693,7 +887,9 @@ function addFeatureFromSelection() {
 
 function featureFromEvent(ev) {
   const id = ev.target?.closest?.('[data-feature]')?.getAttribute('data-feature');
-  return id ? current()?.features.find((f) => f.id === id) : null;
+  if (!id) return null;
+  const doc = current();
+  return doc?.features.find((f) => f.id === id) ?? overlaysFor(doc).find((f) => f.id === id) ?? null;
 }
 
 function openContextMenu(ev) {
@@ -705,9 +901,19 @@ function openContextMenu(ev) {
   const picked = selectedSeq();
   const items = [];
 
-  if (feature) {
+  if (feature && isOrf(feature)) {
+    const seg = feature.segments[0];
+    items.push({ label: `Select “${feature.name}”`, onClick: () => api.setSelection({ start: seg.start, end: seg.end }) });
+    items.push({ label: 'Add as a CDS feature', onClick: () => api.addOrfAsCds(feature.orfInfo) });
+    items.push('-');
+  } else if (feature && isPrimer(feature)) {
+    const seg = feature.segments[0];
+    items.push({ label: `Select “${feature.name}” binding site`, onClick: () => api.setSelection({ start: seg.start, end: seg.end }) });
+    items.push('-');
+  } else if (feature) {
     items.push({ label: `Select “${feature.name}”`, onClick: () => api.focusFeature(feature) });
     items.push({ label: 'Copy feature sequence', onClick: () => copy(featureSequence(doc, feature)) });
+    items.push({ label: 'Copy feature (annotation only)', onClick: () => api.copyFeatureAnnotations([feature.id]) });
     if (feature.type === 'CDS') {
       items.push({ label: 'Copy protein', onClick: () => copy(translate(codingSequence(doc, feature)), 'residues') });
     }
@@ -724,6 +930,7 @@ function openContextMenu(ev) {
   });
   items.push({ label: 'Copy fragment with features', disabled: !sel, onClick: () => api.copyFragment() });
   items.push({ label: 'Paste fragment here', disabled: !state.clipboard, onClick: () => api.pasteFragment() });
+  items.push({ label: 'Paste copied features here', disabled: !state.featureClip, onClick: () => api.pasteFeatureAnnotations() });
   items.push('-');
   items.push({ label: 'Make a forward primer', disabled: !picked, onClick: () => addPrimerFromSelection(1) });
   items.push({ label: 'Make a reverse primer', disabled: !picked, onClick: () => addPrimerFromSelection(-1) });
@@ -749,7 +956,14 @@ function renderView(doc) {
   const sites = shownSites(doc);
   const opts = {
     selection: state.selection, sites, highlight: state.highlight,
-    onPick: (f) => f && api.focusFeature(f),
+    overlays: overlaysFor(doc),
+    // a reading frame is not a feature of the document: picking one just selects it
+    onPick: (f) => {
+      if (!f) return;
+      if (!isOverlay(f)) { api.focusFeature(f); return; }
+      if (isPrimer(f)) state.panel = 'Primers';
+      api.setSelection({ start: f.segments[0].start, end: f.segments[0].end });
+    },
     onPickSite: (st) => api.setSelection({ start: st.site.start, end: st.site.end }),
   };
   if (state.view === 'trace') {
@@ -817,11 +1031,15 @@ function renderView(doc) {
       // would drop the drag. Only once the drag ends do the panels catch up.
       onSelect: (sel, info) => {
         state.selection = sel;
+        state.selAnchor = null;
+        state.selHead = null;
+        if (sel) state.caret = null;
+        else if (info && 'caret' in info && info.caret !== null) state.caret = info.caret;
         renderStatus(doc);
         if (!info?.live) { syncHighlight(); render(); }
       },
       showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
-      reads: readsFor(doc),
+      reads: readsFor(doc), caret: state.selection ? null : state.caret,
     });
     view.append(sv);
     view.onscroll = () => sv.onScroll?.();
@@ -1006,7 +1224,27 @@ document.addEventListener('keydown', (e) => {
   else if (mod && key === 'o') { e.preventDefault(); el('fileInput').click(); }
   else if (mod && key === 'c' && !typing && state.selection) { e.preventDefault(); copy(selectedSeq()); }
   else if (mod && key === 'a' && !typing && current()) { e.preventDefault(); api.setSelection({ start: 0, end: current().seq.length }); }
-  else if (!typing && e.key === 'Escape') { closeMenu(); state.selection = null; state.highlight = null; render(); }
+  else if (!typing && e.key === 'Escape') { closeMenu(); state.selection = null; state.caret = null; state.highlight = null; render(); }
+  else if (!typing && !mod && !e.altKey && current() && state.view === 'seq') {
+    // typing straight into the sequence view
+    let handled = false;
+    if (BASE_KEY.test(e.key)) handled = insertAtCaret(e.key.toUpperCase());
+    else if (e.key === 'Backspace') handled = deleteAtCaret(-1);
+    else if (e.key === 'Delete') handled = deleteAtCaret(1);
+    else if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) handled = moveCaret(e.key, e.shiftKey);
+    if (handled) e.preventDefault();
+  }
+});
+
+// pasting bases at the caret, or over the selection
+document.addEventListener('paste', (e) => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+  if (!current() || state.view !== 'seq') return;
+  const text = e.clipboardData?.getData('text/plain') ?? '';
+  const seq = cleanSequence(text.replace(/^>.*$/gm, ''));
+  if (!seq) return;
+  e.preventDefault();
+  if (!insertAtCaret(seq, 'Paste bases')) toast('Click in the sequence first, or select the bases to replace', 'error');
 });
 
 // the browser's own Copy (menu bar, or a trackpad gesture) — our selection is
