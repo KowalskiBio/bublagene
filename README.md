@@ -5,10 +5,11 @@
 
 **A local-first DNA workbench for the browser and the command line.**
 
-BublaGene reads `.dna`, GenBank and FASTA files and gives you maps, editable
-annotations, primers, PCR, restriction cloning, assembly, alignment, variants,
-chromatograms, CRISPR guides, and RNA folding. Everything runs on your own
-machine — no sequence is uploaded.
+BublaGene reads `.dna`, GenBank and FASTA files and gives you maps, a typeable
+sequence view, editable annotations, automatic feature detection, primers and
+mutagenesis, PCR, six cloning methods, assembly, alignment, variants,
+chromatograms, CRISPR guides, RNA folding and protein properties. Everything
+runs on your own machine — no sequence is uploaded.
 
 **[Open BublaGene](https://kowalskibio.github.io/bublagene/)** · **[Source](https://github.com/KowalskiBio/bublagene)**
 
@@ -41,7 +42,8 @@ npm run serve
 Open <http://localhost:8642>. Drop a file on the page or start from the built-in
 example.
 
-No build step, no bundler, no server-side component. Node 20 or newer is needed
+No build step, no bundler, no server-side component. (If you edit the code while
+serving it, hard-reload: browsers cache ES modules aggressively.) Node 20 or newer is needed
 for the tests and the CLI; the browser app runs from static files.
 
 ### Command line
@@ -57,53 +59,119 @@ node tools/bg.mjs pcr plasmid.dna <forward> <reverse> --json
 
 ## What you can do
 
+The browser app is the whole toolbox; the [command line](#the-command-line)
+covers the engines that make sense without a screen. Panels are grouped in the
+inspector: **Sequence** (Features, Detect, Plot, Protein), **Primers** (Primers,
+Mutate, CRISPR), **Enzymes** (Enzymes, Digest), **Cloning**, **Analyse**
+(Alignment, Contigs, Search, Structure) and **File** (File, Library, History).
+
 ### Maps, sequence and editing
 
 - Circular and linear maps with stacked feature lanes, enzyme sites and cut
-  positions.
-- Both strands, feature bars, codon-aligned amino acids, a six-frame translation
-  track and a live ORF list.
-- Drag to select; right-click to copy as bases, reverse complement, protein or
-  FASTA, make primers, add a feature, delete/replace bases, or set a new origin.
-- Feature editing includes name, type, strand, colour and arbitrary
-  qualifiers. Features can be multi-selected, reordered by drag, and copied
-  with their annotations.
-- Fragments copy and paste across documents; undo/redo coalesces bursts of
-  typing; autosave keeps an IndexedDB session plus a small recovery mirror.
+  positions. Force either style for any file, or show the map above the
+  sequence (**Map + sequence**).
+- Sequence view with both strands, feature bars, codon-aligned amino acids and
+  a six-frame translation track. Optional dashed bars draw open reading frames
+  and every place a primer anneals, on the map and in the sequence.
+- Click to put a caret and type bases; Backspace, Delete, the arrow keys (with
+  Shift to select), Home/End and paste all edit at the caret. Drag to select;
+  right-click to copy as bases, reverse complement, protein or FASTA, make
+  primers, add a feature, delete or replace bases, or set a new origin.
+- Feature editing covers name, type, strand, colour and arbitrary qualifiers.
+  Features can be multi-selected, reordered by drag, and copied, cut and pasted
+  as annotations (positions kept relative to each other).
+- Fragments copy and paste across documents. Undo and redo coalesce bursts of
+  typing, and the **History** panel lists every step so you can jump to any of
+  them. Autosave keeps an IndexedDB session plus a small recovery mirror.
+- **Export** the map as SVG, PNG or a one-page PDF (always dark-on-white), or
+  **Print** a sheet built for paper: the map, a feature table, primers and the
+  whole numbered sequence, however little of it is on screen.
 
-### Primers and PCR
+### Annotation and analysis
+
+- **Detect** scans both strands for known elements: promoters, epitope and
+  purification tags, protease sites, recombination sites and common primer
+  sites. Tags are found in any reading frame whatever the codons; DNA elements
+  tolerate a chosen percentage of mismatches and wrap the origin of a circle.
+  It can also learn from the features annotated in your other open files, and
+  you can save any selection as your own element.
+- **Plot** shows GC content, GC skew and cumulative skew along the sequence;
+  click the plot to select that stretch.
+- **Protein** gives mass, pI, charge, hydropathy and a motif scan (tags,
+  cleavage sites, N-glycosylation sequons, possible membrane helices) for any
+  CDS, and a rotatable 3D backbone for a PDB file you open. Structures are not
+  predicted.
+- **Search** looks through this file, all open files or your saved collections,
+  by sequence (either strand, IUPAC codes), feature, primer or note. Links to
+  NCBI BLAST and Addgene open the other site in a new tab, and send it your
+  query only when you click.
+- **Library** keeps files in this browser, grouped into named collections and
+  searchable without opening them. Share a collection as a project file.
+
+### Primers, PCR and mutagenesis
 
 - SantaLucia nearest-neighbour Tm with salt/Mg correction, GC, 3′ clamp and
-  degenerate-primer expansion.
-- Hairpin, self-dimer and pair-dimer ΔG for ranking candidates.
+  degenerate-primer expansion. Set the Na⁺, Mg²⁺ and primer concentrations of
+  your own buffer.
+- Hairpin, self-dimer and cross-dimer ΔG for every primer and any pair, with
+  warnings.
 - Ranked primer pairs with product-size, Tm-window, specificity, tail and
   restriction-site options.
 - Mismatch-aware PCR with a strict 3′ rule, circular templates, primer-binding
   features on the product, and a simulated gel.
+- **Mutate**: pick an amino acid change in a CDS (the fewest-base codon is
+  chosen) or edit the selected bases, then get overlapping (QuikChange-style) or
+  back-to-back (Q5 SDM-style) primers and the expected mutant, with insertions
+  and deletions supported.
 
-### Enzymes and cloning
+### Enzymes and digests
 
-- 94 curated enzymes with cut offsets, overhang type/length, isoschizomers and
-  methylation sensitivity.
-- Custom enzyme sets as plain JSON (`bublagene/enzymes/1`).
-- Unique cutters, cut-count filters, per-enzyme fragment tables, simulated gels,
-  and a Type IIS overhang compatibility matrix.
-- A Cloning panel drives restriction cloning and Gibson assembly from the open
-  documents: pick vector/insert, choose enzymes, read the ligation verdict for
-  both orientations, and open the product as a new tab.
-- Restriction cloning checks both insert orientations and carries surviving
-  features into the construct.
-- Gibson/homology assembly joins up to 12 fragments (circular or linear);
-  Golden Gate assembly matches Type IIS overhangs. Every assembly has a
-  self-contained replayable plan (`bublagene/assembly/1`).
-- Batch-assemble many constructs from one fragment library.
+- 94 curated enzymes with cut offsets, overhang type and length, and
+  isoschizomers. Custom enzyme sets can be edited and saved in the browser, or
+  exchanged as plain JSON (`bublagene/enzymes/1`).
+- Unique cutters, cut-count filters, per-enzyme fragment tables, and a Type IIS
+  overhang compatibility matrix.
+- Methylation: Dam, Dcm and CpG sensitivity is judged from the sequence around
+  each site, so an enzyme is flagged only where the motif actually overlaps.
+  Only well-established cases are listed.
+- A simulated gel with a ladder, adjustable agarose, and several lanes at once:
+  keep a digest as a lane and try another, or compare digests of different
+  files.
+
+### Cloning
+
+The Cloning panel has six methods, all working from the open documents and
+opening the product as a new tab:
+
+- **Restriction + ligation**, with a picture of the digested pieces and their
+  real sticky ends, the ligation verdict for both orientations, and a map of the
+  product.
+- **Golden Gate** with a Type IIS enzyme, the overhang each file leaves, and a
+  junction-by-junction match check.
+- **Gibson** and **In-Fusion** (the same homology assembly, with a 15 bp default
+  overlap for In-Fusion), circular or linear: up to eight fragments in the
+  panel, twelve with `bg assemble`.
+- **Site-specific recombination**: Gateway LR and BP, Cre/lox and Flp/FRT. The
+  stretch between two matching sites is swapped through their shared core, using
+  the sites annotated on the files (attB1 and attB2 are also found by sequence);
+  the by-product is built too.
+- **TOPO, TA and blunt** insertion at your selection or caret, in either
+  orientation; directional cloning checks for the CACC end.
+
+Every construct keeps a cloning record, shown as a tree: the product on top,
+the pieces beneath, and, when those are open and were cloned themselves, what
+they were made from in turn. Click a node to jump to that file. Gibson and
+Golden Gate assembly also write a replayable plan (`bublagene/assembly/1`), and
+a fragment library can be batch-assembled from the command line.
 
 ### Alignment, variants and contigs
 
 - Affine-gap global, local and banded pairwise alignment with identity and
-  gap statistics.
-- Dot plots and an alignment panel with mismatch/indel colouring.
-- Quality-weighted contig assembly from Sanger reads.
+  gap statistics, dot plots, and mismatch/indel colouring.
+- Multiple alignment of several files (centre-star) with a difference table.
+- **Contigs**: quality-weighted assembly from Sanger reads in either
+  orientation, using chromatogram base calls and qualities where a file has
+  them; open a contig as a file with its reads annotated.
 - Normalised SNPs, indels and MNVs with reference-anchored coordinates that
   round-trip through `variation` features.
 
@@ -130,7 +198,8 @@ node tools/bg.mjs pcr plasmid.dna <forward> <reverse> --json
 ### Formats and persistence
 
 - GenBank, FASTA, GFF3, BED, CSV feature tables, plain-text maps.
-- SVG, PNG and PDF diagrams.
+- SVG, PNG and PDF diagrams (from the browser and the command line), and PDB
+  files for the 3D backbone view.
 - Project archives (`bublagene/project/1`) keep open documents, features,
   primers, cloning/assembly records, alignments and settings with stable IDs.
 - Native records carry schema versions; older `project`, `cloning`, `assembly`
@@ -236,6 +305,10 @@ import { findSites, digest, ENZYME_BY_NAME } from './js/enzymes.js';
 import { designPrimerPairs, simulatePCR } from './js/primers.js';
 import { gibsonAssemble } from './js/cloning.js';
 import { callVariants, variantsToFeatures } from './js/variants.js';
+import { detectFeatures, hitToFeature } from './js/detect.js';
+import { aminoAcidChange, designMutagenesis } from './js/mutagenesis.js';
+import { recombine } from './js/recombination.js';
+import { multipleAlign } from './js/msa.js';
 
 translate('ATGGCCTAA', 11);                 // NCBI table 11
 sixFrameTranslation('ATGGCCTAA');
@@ -252,6 +325,19 @@ const { doc: construct } = gibsonAssemble([vector, insert], { circular: true });
 
 const calls = callVariants(reference, edited);
 doc.features.push(...variantsToFeatures(doc, calls.variants));
+
+// Find known elements, and add the ones you accept as features.
+const hits = detectFeatures(doc, undefined, { maxMismatchRate: 0.05 });
+doc.features.push(...hits.map(hitToFeature));
+
+// Design primers for A5E in the first CDS, and get the expected mutant.
+const change = aminoAcidChange(doc, doc.features.find((f) => f.type === 'CDS'), 5, 'E');
+const { forward, reverse, mutant } = designMutagenesis(doc, change, { method: 'overlap' });
+
+// Swap the stretch between two att sites of an entry clone into a destination.
+const { doc: expression } = recombine(entryClone, destination);
+
+const msa = multipleAlign([{ name: 'a', seq: a }, { name: 'b', seq: b }]);
 ```
 
 ## How it is built
@@ -263,27 +349,36 @@ js/
   model.js            document model, feature catalog, edits that keep features in place
   thermo.js           nearest-neighbour thermodynamics and secondary-structure ΔG
   primers.js          binding, ranked design, mismatch PCR, gel model
+  mutagenesis.js      amino-acid and base changes, overlapping and back-to-back primers
   enzymes.js          enzyme dataset, custom sets, digests, overhangs
-  cloning.js          restriction cloning and Gibson assembly
+  methylation.js      Dam, Dcm and CpG sensitivity from sequence context
+  cloning.js          restriction cloning, Gibson and In-Fusion assembly
   assembly.js         homology/Golden Gate assembly, plans, batch runs
+  recombination.js    att, lox and FRT recombination; TOPO-style insertion
+  detect.js           known-element detection; feature-library.js is its built-in library
   align.js            affine-gap global/local/banded alignment and dot plots
+  msa.js              centre-star multiple alignment and difference table
   contig.js           quality-weighted contig assembly
   variants.js         normalised variant calling and feature round-trip
   crispr.js           guide finding, off-target heuristic, edit simulation
   fold.js             bounded RNA MFE folding
+  protein.js          mass, pI, hydropathy and motif scan; pdb.js reads Cα traces
+  tracks.js           GC content and skew along a sequence
   traces.js           trace trimming, slicing and reference mapping
-  fragment.js         fragment copy/paste and feature reordering
+  fragment.js         fragment and feature copy/paste, feature reordering
   cache.js            digest-keyed caches and stale-alignment invalidation
-  undo.js             coalescing undo/redo
+  undo.js             coalescing undo/redo with a jumpable timeline
   search.js           sequence/feature/qualifier search and filters
+  collection.js       saved collections in IndexedDB, and searching them
   storage.js          File System Access, OPFS and download fallbacks
   compute.js          worker offload with local fallback
   project.js          project archives and schema migrations
-  export.js           SVG, PNG and PDF diagrams
+  export.js           SVG, PNG and PDF diagrams (command line)
+  pdf.js              a minimal one-page PDF writer
   xml.js              small XML parser/writer
   formats/            dna, genbank/fasta, gff3/bed/csv, ab1, scf, ztr, bam
-  ui/                 browser views and panels
   workers/            bounded heavy work
+  ui/                 the browser app, below
 tools/
   bg.mjs              command line
   bench.mjs           5 Mb performance budget
@@ -294,10 +389,44 @@ tests/                unit, property, fuzz, CLI and jsdom UI tests
 The browser and CLI share the same engine modules. There is no duplicated
 analysis logic.
 
+### The browser app
+
+`js/ui/app.js` is a short entry point; the work is split along the lines of what
+changes together:
+
+```
+js/ui/
+  app.js            entry: binds events, first render, offers the last session
+  core.js           page state, undo histories, and the registered renderer
+  documents.js      open, close, edit and undo
+  typing.js         typing into the sequence view
+  clipboard.js      copying, and selection to primer or feature
+  files.js          opening and saving files and projects
+  persist.js        the session kept between visits
+  local-libraries.js  saved enzyme sets and detection elements
+  viewdata.js       what the map and sequence draw (cut sites, ORFs, primer sites)
+  render.js         the one function that redraws the page
+  chrome.js         document tabs, view options, status bar, inspector tabs
+  viewpane.js       the main view: map, sequence, both, or chromatogram
+  cards.js          welcome, restore and empty-document cards
+  contextmenu.js    the right-click menu
+  events.js         buttons, keys, drag-and-drop, clipboard and print
+  api/              what the inspector panels may do (edit, enzymes, design, analysis)
+  panels.js, panels2.js, cloningpanel.js   the inspector panels
+  map.js, seqview.js, traceview.js, proteinview.js   the drawn views
+  export.js         map export and the print sheet
+```
+
+Everything that changes the page calls `render()` from `core.js`. The renderer
+registers itself there rather than being imported, so the code that draws the
+page and the code that changes it never import each other. Panels never touch
+the state directly: they call methods on the `api` object, so what a panel can
+do is listed in one place.
+
 ## Testing
 
 ```bash
-npm test              # 128 tests
+npm test              # 166 tests
 npm run lint          # parse every source file with node --check
 npm run typecheck     # tsc --checkJs over engines and CLI
 npm run test:coverage # line/function thresholds
@@ -305,7 +434,7 @@ npm run bench         # 5 Mb genome budget
 npm run check         # lint + typecheck + tests
 ```
 
-Without external fixtures the suite reports **118 pass, 10 skip, 0 fail**. The
+Without external fixtures the suite reports **156 pass, 10 skip, 0 fail**. The
 skips are environment-gated: tests that need `.dna` files and tests that compare
 the BAM reader with `samtools`.
 
@@ -315,8 +444,7 @@ Point the sample tests at a folder of `.dna` files:
 DNA_SAMPLES=~/plasmids npm test
 ```
 
-With a folder containing alignments but no traces or `samtools`, the suite
-reports **124 pass, 4 skip, 0 fail**. To run the samtools comparison too:
+To run the samtools comparison too:
 
 ```bash
 SAMTOOLS="$(which samtools)" DNA_SAMPLES=~/plasmids npm test
@@ -335,6 +463,21 @@ genome benchmark, and three consecutive test runs in CI to catch flakes.
 - The ABI/SCF readers interpret the common layouts, not every writer variant.
 - Restriction cloning and assembly are deterministic calculators; they do not
   model ligation efficiency, star activity or cellular repair outcomes.
+- Feature detection ships only short, well-known elements (promoters, tags,
+  cleavage and recombination sites, primer sites). Long elements such as
+  resistance genes and origins come from your own saved elements and from the
+  features annotated in your other open files; none are guessed at.
+- Recombination is a crossover inside the sites' shared core, using sites
+  annotated on your files; only attB1 and attB2 are recognised by sequence.
+- Multiple alignment is centre-star: good for variants and clones of one
+  sequence, not for distant homologues.
+- Methylation lists only well-established cases; an enzyme that is not flagged
+  is not guaranteed insensitive.
+- The protein view draws the Cα trace of a PDB file you open. It does not
+  predict structure.
+- BLAST and Addgene are links that open in a new tab when you click; nothing is
+  searched online from inside the app, and there is no sync between devices
+  (share a collection as a project file).
 - `.dna` history blocks that use an unsupported compression are preserved
   byte-for-byte and left undecoded.
 
