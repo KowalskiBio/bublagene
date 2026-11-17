@@ -13,15 +13,28 @@ import { callVariants, variantsToFeatures, formatVariant } from '../variants.js'
 import { structureToSvg } from '../fold.js';
 import { describeSegments } from '../formats/dna.js';
 import { cloningPanel } from './cloningpanel.js';
+import { historyPanel, plotPanel, proteinPanel, contigsPanel, searchPanel, libraryPanel, msaSection } from './panels2.js';
 import { aminoAcidChange } from '../mutagenesis.js';
+import { methylationSummary, METHYLATION_LABEL, HOST_NOTE } from '../methylation.js';
+import { primerProperties, pairDimer } from '../thermo.js';
 
-export const PANELS = ['Features', 'Detect', 'Primers', 'Mutate', 'Enzymes', 'Digest', 'Cloning', 'Alignment', 'CRISPR', 'Structure', 'File'];
+// Panels, grouped for the tab bar. Order within a group is the order shown.
+export const PANEL_GROUPS = [
+  ['Sequence', ['Features', 'Detect', 'Plot', 'Protein']],
+  ['Primers', ['Primers', 'Mutate', 'CRISPR']],
+  ['Enzymes', ['Enzymes', 'Digest']],
+  ['Cloning', ['Cloning']],
+  ['Analyse', ['Alignment', 'Contigs', 'Search', 'Structure']],
+  ['File', ['File', 'Library', 'History']],
+];
+export const PANELS = PANEL_GROUPS.flatMap(([, names]) => names);
 
 export function renderPanel(name, ctx) {
   const el = h('div');
   ({
     Features: features, Detect: detectPanel, Primers: primers, Mutate: mutatePanel, Enzymes: enzymes, Digest: digestPanel, Cloning: cloningPanel,
     Alignment: alignmentPanel, CRISPR: crisprPanel, Structure: structurePanel, File: file,
+    History: historyPanel, Plot: plotPanel, Protein: proteinPanel, Contigs: contigsPanel, Search: searchPanel, Library: libraryPanel,
   })[name](el, ctx);
   return el;
 }
@@ -257,21 +270,53 @@ function detectPanel(el, { doc, state, api, others = [] }) {
 function primers(el, { doc, state, api }) {
   const sel = state.selection;
   el.append(h('h3', {}, `Primers (${doc.primers.length})`));
+  const tmSet = state.tm;
+  const tmOpts = { na: tmSet.na / 1000, mg: tmSet.mg / 1000, oligo: tmSet.oligo * 1e-9 };
+  const conditions = h('details', { style: { marginBottom: '8px' } },
+    h('summary', { class: 'sub', style: { cursor: 'pointer' } }, `Melting-temperature conditions: ${tmSet.na} mM Na⁺, ${tmSet.mg} mM Mg²⁺, ${tmSet.oligo} nM primer`),
+    h('div', { class: 'group', style: { marginTop: '6px' } },
+      ...[['tmNa', 'Na⁺ (mM)', 'na', 0, 1000], ['tmMg', 'Mg²⁺ (mM)', 'mg', 0, 50], ['tmOligo', 'Primer (nM)', 'oligo', 1, 10000]].map(([id, label, key, min, max]) =>
+        h('label', { class: 'field', style: { flex: '1 1 80px' } }, h('span', {}, label),
+          h('input', { id, type: 'number', min, max, step: 'any', value: tmSet[key], oninput: (e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) api.setTm({ [key]: v }); } })))),
+    h('p', { class: 'sub' }, 'Nearest-neighbour Tm with a salt correction. Use the conditions of your PCR buffer.'));
+  el.append(conditions);
   if (!doc.primers.length) el.append(h('p', { class: 'empty' }, 'No primers yet.'));
   for (const p of doc.primers) {
     const sites = findBindingSites(doc.seq, doc.circular, p.seq);
+    const props = primerProperties(p.seq, tmOpts);
+    const hairpinBad = props.hairpin.dg <= -2;
+    const selfBad = props.selfDimer.dg <= -6;
     el.append(h('div', {
       class: 'row',
       onclick: () => sites[0] && api.setSelection({ start: sites[0].start, end: sites[0].end }),
     },
       h('span', { class: 'label' }, h('span', {}, p.name),
         h('span', { class: 'sub mono', style: { display: 'block', fontSize: '11px' } }, p.seq.length > 34 ? `${p.seq.slice(0, 34)}…` : p.seq)),
-      h('span', { class: 'meta' }, `${p.seq.length} nt`, h('br'), `${meltingTemp(p.seq).toFixed(0)}°C`)));
+      h('span', { class: 'meta' }, `${p.seq.length} nt`, h('br'), `${props.tm.toFixed(0)}°C`)));
+    el.append(h('p', { class: 'sub', style: { marginLeft: '26px', color: hairpinBad || selfBad ? 'var(--mismatch)' : undefined } },
+      `GC ${props.gc.toFixed(0)}% · hairpin ${props.hairpin.stem ? `ΔG ${props.hairpin.dg.toFixed(1)} (${props.hairpin.stem} bp stem)` : 'none'} · self-dimer ${props.selfDimer.length ? `ΔG ${props.selfDimer.dg.toFixed(1)} (${props.selfDimer.length} bp)` : 'none'}${hairpinBad || selfBad ? ' ⚠' : ''}`));
     if (!sites.length) el.append(h('p', { class: 'sub', style: { marginLeft: '26px' } }, 'No binding site on this sequence'));
     for (const b of sites) {
       el.append(h('p', { class: 'sub', style: { marginLeft: '26px' } },
         `${b.strand === 1 ? '→' : '←'} ${fmt(b.start + 1)}–${fmt(b.end)}, ${b.annealed.length} nt annealed, Tm ${b.tm.toFixed(0)}°C${b.tail ? `, ${b.tail.length} nt tail` : ''}`));
     }
+  }
+
+  if (doc.primers.length >= 2) {
+    const a = doc.primers.find((x) => x.id === state.primerPair.a) ?? doc.primers[0];
+    const b = doc.primers.find((x) => x.id === state.primerPair.b) ?? doc.primers[1];
+    el.append(h('h3', {}, 'Check a pair'));
+    const pick = (key, chosen) => h('select', { onchange: (e) => api.setPrimerPair({ [key]: e.target.value }) },
+      doc.primers.map((x) => h('option', { value: x.id, selected: x.id === chosen.id }, x.name)));
+    el.append(h('div', { class: 'group' }, pick('a', a), h('span', { class: 'sub' }, '×'), pick('b', b)));
+    const cross = pairDimer(a.seq, b.seq);
+    const tmA = primerProperties(a.seq, tmOpts).tm;
+    const tmB = primerProperties(b.seq, tmOpts).tm;
+    const bad = cross.dg <= -6;
+    const warn = Math.abs(tmA - tmB) > 4;
+    el.append(h('p', { class: 'sub', style: { color: bad || warn ? 'var(--mismatch)' : undefined } },
+      `Tm ${tmA.toFixed(1)} and ${tmB.toFixed(1)} °C (difference ${Math.abs(tmA - tmB).toFixed(1)}${warn ? ', more than 4 ⚠' : ''}). Cross-dimer: ${cross.length ? `${cross.length} bp, ΔG ${cross.dg.toFixed(1)} kcal/mol${bad ? ' ⚠' : ''}` : 'none found'}.`));
+    if (cross.structure) el.append(h('p', { class: 'sub mono', style: { fontSize: '11.5px' } }, cross.structure));
   }
 
   el.append(h('h3', {}, 'From the selection'));
@@ -430,13 +475,19 @@ function enzymes(el, { doc, state, api }) {
 
   const unique = rows.filter((r) => r.sites.length === 1);
   el.append(h('h3', {}, `Unique cutters (${unique.length})`));
-  const t = h('table', { class: 'data' }, h('tr', {}, h('th', {}, 'Enzyme'), h('th', {}, 'Site'), h('th', {}, 'Cuts after'), h('th', {}, 'Ends')));
+  const t = h('table', { class: 'data' }, h('tr', {}, h('th', {}, 'Enzyme'), h('th', {}, 'Site'), h('th', {}, 'Cuts after'), h('th', {}, 'Ends'), h('th', { title: 'Methylation that blocks or impairs this cut' }, 'Methylation')));
   for (const r of unique) {
+    const meth = methylationSummary(doc, r.name, r.sites);
     t.append(h('tr', { style: { cursor: 'pointer' }, onclick: () => api.setSelection({ start: r.sites[0].site.start, end: r.sites[0].site.end }) },
       h('td', {}, r.name), h('td', { class: 'mono' }, ENZYME_BY_NAME[r.name].site),
-      h('td', {}, fmt(r.sites[0].top)), h('td', { class: 'sub' }, overhangLabel(ENZYME_BY_NAME[r.name]))));
+      h('td', {}, fmt(r.sites[0].top)), h('td', { class: 'sub' }, overhangLabel(ENZYME_BY_NAME[r.name])),
+      h('td', { class: 'sub', style: { color: meth.length ? 'var(--mismatch)' : undefined } },
+        meth.length
+          ? meth.map(({ kind, effect }) => h('span', { title: `${effect === 'blocked' ? 'Blocked' : 'Impaired by overlapping'} ${METHYLATION_LABEL[kind]} methylation: ${HOST_NOTE[kind]}`, style: { marginRight: '6px' } }, `${METHYLATION_LABEL[kind]}${effect === 'blocked' ? ' ✕' : ' ~'}`))
+          : '–')));
   }
   el.append(t);
+  el.append(h('p', { class: 'sub' }, '✕ blocked, ~ impaired when the methylated motif overlaps the site. Only well-established cases are listed; an enzyme not marked is not guaranteed insensitive.'));
 
   enzymeSetControls(el, { doc, state, api });
 }
@@ -498,7 +549,24 @@ const rowsThatCut = (doc) => ENZYMES.filter((e) => findSites(doc.seq, doc.circul
 
 // ---- Digest -----------------------------------------------------------------
 
-function digestPanel(el, { doc, state, api }) {
+// Fragment sizes of one file cut with some enzymes; with none, it is left whole.
+function laneSizes(d, names) {
+  const cuts = names.flatMap((n) => findSites(d.seq, d.circular, ENZYME_BY_NAME[n]));
+  return cuts.length ? digest(d.seq, d.circular, cuts).map((f) => f.len) : [d.seq.length];
+}
+
+// What methylation does to the enzymes picked, said in words, once per kind.
+function methylationNotes(doc, names) {
+  const notes = [];
+  for (const n of names) {
+    for (const { kind, effect } of methylationSummary(doc, n, findSites(doc.seq, doc.circular, ENZYME_BY_NAME[n]))) {
+      notes.push(`${n} is ${effect === 'blocked' ? 'blocked by' : 'impaired by overlapping'} ${METHYLATION_LABEL[kind]} methylation: ${HOST_NOTE[kind]}.`);
+    }
+  }
+  return notes;
+}
+
+function digestPanel(el, { doc, state, api, docs = [] }) {
   const chosen = state.digestWith;
   el.append(h('h3', {}, 'Digest with'));
   const chips = h('div', { class: 'chips' });
@@ -509,32 +577,45 @@ function digestPanel(el, { doc, state, api }) {
     }, `${r.name} ${r.sites.length}`));
   }
   el.append(chips);
-  if (!chosen.length) { el.append(h('p', { class: 'empty' }, 'Pick one or more enzymes to cut with.')); return; }
 
-  const cuts = chosen.flatMap((n) => findSites(doc.seq, doc.circular, ENZYME_BY_NAME[n]));
-  const frags = digest(doc.seq, doc.circular, cuts).map((f, i) => ({ ...f, i }));
-  const bySize = [...frags].sort((a, b) => b.len - a.len);
+  const saved = state.gelLanes.map((l) => ({ l, d: docs.find((x) => x.id === l.docId) })).filter((x) => x.d);
+  if (!chosen.length && !saved.length) { el.append(h('p', { class: 'empty' }, 'Pick one or more enzymes to cut with.')); return; }
+  if (!chosen.length) el.append(h('p', { class: 'empty' }, 'Pick enzymes to add this file to the gel, or compare the lanes you saved.'));
+  for (const note of methylationNotes(doc, chosen)) el.append(h('p', { class: 'sub' }, `⚠ ${note}`));
 
-  el.append(h('h3', {}, `Fragments (${frags.length})`));
-  const t = h('table', { class: 'data' }, h('tr', {}, h('th', {}, 'Size'), h('th', {}, 'From'), h('th', {}, 'Ends')));
-  for (const f of bySize) {
-    const end = (e) => (e.type === 'blunt' ? 'blunt' : e.type === 'natural' ? 'end' : `${e.type}′ ${e.oh}`);
-    t.append(h('tr', {
-      style: { cursor: 'pointer' },
-      onclick: () => api.setSelection({ start: f.start, end: f.end === 0 && !doc.circular ? doc.seq.length : f.end }),
-    },
-      h('td', {}, `${fmt(f.len)} bp`),
-      h('td', { class: 'sub' }, `${fmt(f.start + 1)}–${fmt(f.end || doc.seq.length)}`),
-      h('td', { class: 'sub mono', style: { fontSize: '11px' } }, `${end(f.left.end)} / ${end(f.right.end)}`)));
+  let sizes = [];
+  if (chosen.length) {
+    const cuts = chosen.flatMap((n) => findSites(doc.seq, doc.circular, ENZYME_BY_NAME[n]));
+    const frags = digest(doc.seq, doc.circular, cuts).map((f, i) => ({ ...f, i }));
+    const bySize = [...frags].sort((a, b) => b.len - a.len);
+    sizes = bySize.map((f) => f.len);
+
+    el.append(h('h3', {}, `Fragments (${frags.length})`));
+    const t = h('table', { class: 'data' }, h('tr', {}, h('th', {}, 'Size'), h('th', {}, 'From'), h('th', {}, 'Ends')));
+    for (const f of bySize) {
+      const end = (e) => (e.type === 'blunt' ? 'blunt' : e.type === 'natural' ? 'end' : `${e.type}′ ${e.oh}`);
+      t.append(h('tr', {
+        style: { cursor: 'pointer' },
+        onclick: () => api.setSelection({ start: f.start, end: f.end === 0 && !doc.circular ? doc.seq.length : f.end }),
+      },
+        h('td', {}, `${fmt(f.len)} bp`),
+        h('td', { class: 'sub' }, `${fmt(f.start + 1)}–${fmt(f.end || doc.seq.length)}`),
+        h('td', { class: 'sub mono', style: { fontSize: '11px' } }, `${end(f.left.end)} / ${end(f.right.end)}`)));
+    }
+    el.append(t);
   }
-  el.append(t);
+
+  // every lane on the gel: this digest first, then the ones saved from any file
+  const lanes = [
+    ...(chosen.length ? [{ caption: 'digest', sizes }] : []),
+    ...saved.map(({ l, d }) => ({ caption: l.label, sizes: laneSizes(d, l.enzymes) })),
+  ];
 
   el.append(h('h3', {}, 'Gel'));
   // Redraw only the gel while the slider moves: rebuilding the whole panel would
   // replace the slider under the pointer and end the drag after one step.
-  const sizes = bySize.map((f) => f.len);
   const agaroseLabel = h('span', {}, `Agarose ${state.agarose}%`);
-  const gelBox = h('div', {}, gel(sizes, state.ladder, state.agarose));
+  const gelBox = h('div', {}, gel(lanes, state.ladder, state.agarose));
   el.append(h('label', { class: 'field' }, agaroseLabel,
     h('input', {
       id: 'agarose', type: 'range', min: 0.5, max: 2, step: 0.1, value: state.agarose,
@@ -542,20 +623,35 @@ function digestPanel(el, { doc, state, api }) {
         const v = Number(e.target.value);
         api.setAgarose(v, true);
         agaroseLabel.textContent = `Agarose ${v}%`;
-        clear(gelBox).append(gel(sizes, state.ladder, v));
+        clear(gelBox).append(gel(lanes, state.ladder, v));
       },
     })));
   el.append(gelBox);
   el.append(h('label', { class: 'field', style: { marginTop: '8px' } }, h('span', {}, 'Ladder'),
     h('select', { onchange: (e) => api.setLadder(e.target.value) },
       Object.keys(LADDERS).map((k) => h('option', { value: k, selected: k === state.ladder }, k)))));
+
+  el.append(h('div', { class: 'group' },
+    h('button', {
+      class: 'btn', disabled: !chosen.length, title: 'Keep this digest on the gel while you try another',
+      onclick: () => api.addGelLane(`${doc.name}: ${chosen.join('+')}`, chosen),
+    }, 'Keep this digest as a lane'),
+    h('button', { class: 'btn', onclick: () => api.addGelLane(`${doc.name} uncut`, []) }, 'Add an uncut lane')));
+  for (const { l, d } of saved) {
+    el.append(h('div', { class: 'row', style: { cursor: 'default' } },
+      h('span', { class: 'label', title: l.label }, l.label),
+      h('span', { class: 'meta' }, `${laneSizes(d, l.enzymes).length} band${laneSizes(d, l.enzymes).length === 1 ? '' : 's'}`),
+      h('button', { class: 'btn', style: { padding: '1px 7px' }, onclick: () => api.removeGelLane(l.id) }, 'Remove')));
+  }
+  if (saved.length) el.append(h('p', { class: 'sub' }, 'Lanes keep their file and enzymes, so you can compare digests of different files side by side.'));
 }
 
-function gel(sizes, ladderName, agarose) {
+// lanes: [{ caption, sizes }]
+function gel(lanes, ladderName, agarose) {
   const box = h('div', { class: 'gel' });
   const H = 300;
   const lane = (caption, bands, isLadder) => {
-    const l = h('div', { class: `lane${isLadder ? ' ladder' : ''}` }, h('div', { class: 'caption' }, caption));
+    const l = h('div', { class: `lane${isLadder ? ' ladder' : ''}` }, h('div', { class: 'caption', title: caption }, caption));
     const counts = new Map();
     for (const bp of bands) counts.set(bp, (counts.get(bp) ?? 0) + 1);
     for (const [bp, n] of counts) {
@@ -568,13 +664,14 @@ function gel(sizes, ladderName, agarose) {
     return l;
   };
   box.append(lane(ladderName, LADDERS[ladderName] ?? [], true));
-  box.append(lane('digest', sizes, false));
+  for (const l of lanes) box.append(lane(l.caption, l.sizes, false));
   return box;
 }
 
 // ---- Alignment -------------------------------------------------------------
 
-function alignmentPanel(el, { doc, state, api, others = [] }) {
+function alignmentPanel(el, { doc, state, api, others = [], docs = [] }) {
+  if (docs.length >= 2) msaSection(el, { state, api, docs });
   el.append(h('h3', {}, 'Align to another document'));
   if (!others.length) {
     el.append(h('p', { class: 'empty' }, 'Open a second document to align against this one.'));

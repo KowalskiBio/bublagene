@@ -47,6 +47,23 @@ export class History {
     return entry.state;
   }
 
+  // The steps taken and still available to redo, oldest first, and where we are
+  // among them: position 0 is the state before the first edit.
+  timeline() {
+    return {
+      labels: [...this.past.map((e) => e.label), ...[...this.future].reverse().map((e) => e.label)],
+      position: this.past.length,
+    };
+  }
+
+  // Move to `position` in the timeline, undoing or redoing as needed.
+  jumpTo(position, current) {
+    let state = current;
+    while (this.past.length > position) state = this.undo(state);
+    while (this.past.length < position && this.future.length) state = this.redo(state);
+    return state;
+  }
+
   clear() {
     this.past.length = 0;
     this.future.length = 0;

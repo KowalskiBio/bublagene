@@ -42,20 +42,14 @@ const RAW = [
 ];
 
 import { iupacRegexSource, revcomp, mod } from './seq.js';
+import { methylationKinds, KNOWN_ENZYMES as ENZYME_METHYLATED } from './methylation.js';
 
 // Enzymes whose cut lies outside their recognition site.
 const TYPE_IIS = new Set(['BsaI', 'BsmBI', 'BbsI', 'SapI', 'BspQI', 'Esp3I', 'BtgZI', 'PaqCI', 'AarI', 'BspMI', 'FokI', 'BsmFI']);
 
-// Methylation sensitivity worth warning about. `dam` overlaps GATC, `dcm`
-// overlaps CCWGG, `cpg` is blocked by CpG methylation.
-const METHYLATION = {
-  BamHI: ['dam'], BclI: ['dam'], BglII: ['dam'], DpnII: ['dam'], MboI: ['dam'],
-  XbaI: ['dam'], ClaI: ['dam'], TaqI: ['dam'], AlwNI: ['dam'], BspHI: ['dam'],
-  BspEI: ['dam', 'cpg'], HpaII: ['cpg'], HhaI: ['cpg'], MspI: ['cpg'],
-  SmaI: ['cpg'], XmaI: ['cpg'], SacII: ['cpg'], BssHII: ['cpg'], NotI: ['cpg'],
-  EagI: ['cpg'], MluI: ['cpg'], NruI: ['cpg'], KasI: ['cpg'], FseI: ['cpg'],
-  EcoRII: ['dcm'], StuI: ['dcm'], AatII: ['dcm'], AvaII: ['dcm'],
-};
+// Which kinds of methylation an enzyme cares about; the rules and the sequence
+// context live in methylation.js.
+const METHYLATION = Object.fromEntries(ENZYME_METHYLATED.map((n) => [n, methylationKinds(n)]));
 
 function classify({ name, site, top, bottom }) {
   const outside = top > site.length || bottom > site.length || top < 0 || bottom < 0;

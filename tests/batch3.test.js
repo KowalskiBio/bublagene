@@ -20,7 +20,8 @@ test('enzyme metadata: types, overhangs, methylation and isoschizomers', () => {
   assert.equal(eco.palindromic, true);
   assert.equal(enzymeInfo(ENZYME_BY_NAME.PstI).overhang, '3');
   assert.equal(enzymeInfo(ENZYME_BY_NAME.SmaI).overhang, 'blunt');
-  assert.ok(ENZYME_BY_NAME.BamHI.methylation.includes('dam'));
+  assert.ok(ENZYME_BY_NAME.ClaI.methylation.includes('dam'));
+  assert.ok(!ENZYME_BY_NAME.BamHI.methylation.includes('dam'), 'BamHI is not Dam-sensitive');
   assert.deepEqual(isoschizomersOf('BsmBI'), ['Esp3I']);
   assert.ok(isoschizomersOf('BspQI').includes('SapI'));
   assert.equal(ENZYMES.length, 94);

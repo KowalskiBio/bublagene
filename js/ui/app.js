@@ -11,7 +11,7 @@ import { readTraces } from '../formats/ztr.js';
 import { traceBaseToReference } from '../traces.js';
 import { traceView } from './traceview.js';
 import { History } from '../undo.js';
-import { PANELS, renderPanel } from './panels.js';
+import { PANELS, PANEL_GROUPS, renderPanel } from './panels.js';
 import { exampleDocument } from './sample.js';
 import { readDna, writeDna } from '../formats/dna.js';
 import { readGenBank, writeGenBank, readFasta, writeFasta } from '../formats/genbank.js';
@@ -29,6 +29,12 @@ import { saveDocument, openDocument, supportsFileSystemAccess, writeAutosave, re
 import { projectToJSON, projectFromJSON } from '../project.js';
 import { detectFeatures, hitToFeature, libraryFromDocs, normalizeLibrary, BUILTIN_LIBRARY } from '../detect.js';
 import { designMutagenesis } from '../mutagenesis.js';
+import { assembleContigs } from '../contig.js';
+import { multipleAlign } from '../msa.js';
+import { parsePdb } from '../pdb.js';
+import { searchAll } from '../search.js';
+import { saveToCollection, listCollection, getFromCollection, removeFromCollection, searchCollection } from '../collection.js';
+import { exportableSvg, svgBlob, pngBlob, pdfBlob, download, printSheet } from './export.js';
 import { orfsFor, orfFeatures, primerOverlays, isOrf, isPrimer, isOverlay } from './overlays.js';
 
 const state = {
@@ -65,6 +71,17 @@ const state = {
   crispr: null,
   fold: null,
   clipboard: null,
+  mapStyle: 'auto',     // 'auto' follows the file; or force 'circular' / 'linear'
+  gelLanes: [],         // saved lanes for the digest gel: { id, docId, label, enzymes }
+  tm: { na: 50, mg: 0, oligo: 250 }, // melting-temperature conditions: mM, mM, nM
+  primerPair: { a: null, b: null },
+  plot: { track: 'gc', window: 100 },
+  protein: { feature: null, structure: null, colour: 'structure', highlight: '' },
+  structures: [],       // opened PDB files: { id, structure }
+  contigs: { ids: [], minOverlap: 30, maxMismatch: 10, useTraces: true, result: null, error: null },
+  msa: { ids: [], result: null, error: null },
+  search: { query: '', scope: 'file', results: null, saved: null, error: null },
+  library: { records: null, loading: false, name: 'My files', error: null },
   mutate: { mode: 'aa', feature: null, residue: 1, newAa: 'A', bases: '', method: 'overlap', targetTm: '', result: null, error: null },
   detect: null,        // last feature-detection run: { docId, hits, rate, useDocs }
   detectRate: 5,       // allowed mismatches, percent
@@ -176,6 +193,8 @@ function remember() {
     showTranslation: state.showTranslation,
     showSixFrame: state.showSixFrame,
     showOrfs: state.showOrfs,
+    mapStyle: state.mapStyle,
+    tm: state.tm,
     showPrimers: state.showPrimers,
     orfMin: state.orfMin,
     showComplement: state.showComplement,
@@ -209,6 +228,8 @@ function restoreSession(saved) {
   state.showTranslation = saved.showTranslation ?? true;
   state.showSixFrame = saved.showSixFrame ?? false;
   state.showOrfs = saved.showOrfs ?? false;
+  state.mapStyle = saved.mapStyle ?? 'auto';
+  state.tm = saved.tm ?? state.tm;
   state.showPrimers = saved.showPrimers ?? true;
   state.orfMin = saved.orfMin ?? 100;
   state.showComplement = saved.showComplement ?? true;
@@ -421,7 +442,14 @@ async function openFiles(files) {
   for (const file of files) {
     try {
       const lower = file.name.toLowerCase();
-      if (lower.endsWith('.dna')) {
+      if (lower.endsWith('.pdb') || lower.endsWith('.ent')) {
+        const structure = parsePdb(await readFileText(file), { name: file.name.replace(/\.(pdb|ent)$/i, '') });
+        state.structures.push({ id: newId(), structure });
+        state.protein = { ...state.protein, structure: state.structures[state.structures.length - 1].id };
+        state.panel = 'Protein';
+        render();
+        toast(`${structure.name}: ${structure.residues} residues in ${structure.chains.length} chain${structure.chains.length === 1 ? '' : 's'}`);
+      } else if (lower.endsWith('.dna')) {
         const doc = readDna(await readFileData(file), file.name);
         openDoc(doc);
         for (const w of doc.source.warnings ?? []) toast(w);
@@ -716,6 +744,159 @@ const api = {
     state.panel = 'Primers';
     render();
   },
+  // ---- history ----
+  timeline() { const d = current(); return (d && undo.get(d.id)?.timeline?.()) ?? { labels: [], position: 0 }; },
+  jumpHistory(position) {
+    const doc = current();
+    if (!doc) return;
+    const stack = undo.get(doc.id);
+    const prev = stack.jumpTo(position, cloneDoc(doc));
+    state.docs[state.active] = prev;
+    undo.set(prev.id, stack);
+    state.selection = null; state.caret = null; state.highlight = null; state.selectedFeatures = new Set();
+    render();
+  },
+  // ---- gel, Tm, display ----
+  addGelLane(label, enzymes) {
+    const doc = current();
+    if (!doc) return;
+    if (state.gelLanes.length >= 8) { toast('The gel has room for eight saved lanes', 'error'); return; }
+    state.gelLanes = [...state.gelLanes, { id: newId(), docId: doc.id, label, enzymes: [...enzymes] }];
+    render();
+  },
+  removeGelLane(id) { state.gelLanes = state.gelLanes.filter((l) => l.id !== id); render(); },
+  setTm(patch) { state.tm = { ...state.tm, ...patch }; render(); },
+  setPrimerPair(patch) { state.primerPair = { ...state.primerPair, ...patch }; render(); },
+  setMapStyle(v) { state.mapStyle = v; render(); },
+  setPlot(patch) { state.plot = { ...state.plot, ...patch }; render(); },
+  // ---- protein and structures ----
+  setProtein(patch) { state.protein = { ...state.protein, ...patch }; render(); },
+  pickFile() { el('fileInput').click(); },
+  removeStructure(id) { state.structures = state.structures.filter((x) => x.id !== id); render(); },
+  // ---- contigs and multiple alignment ----
+  traceCount(doc) { return traces.get(doc.id)?.length ?? 0; },
+  setContigs(patch) { state.contigs = { ...state.contigs, result: null, error: null, ...patch }; render(); },
+  runContigs() {
+    const c = state.contigs;
+    const reads = [];
+    for (const id of c.ids) {
+      const d = state.docs.find((x) => x.id === id);
+      if (!d) continue;
+      const found = c.useTraces ? traces.get(d.id) : null;
+      if (found?.length) found.forEach((t, i) => reads.push({ name: `${d.name}:${t.name || i + 1}`, seq: t.bases, qualities: t.confidence }));
+      else reads.push({ name: d.name, seq: d.seq });
+    }
+    try {
+      if (!reads.length) throw new Error('Pick the files to assemble first');
+      const all = assembleContigs(reads, { minOverlap: c.minOverlap, maxMismatchRate: c.maxMismatch / 100 });
+      const joined = all.filter((x) => x.reads.length > 1);
+      const contigs = joined.length ? joined : all;
+      const unplaced = joined.length ? all.filter((x) => x.reads.length === 1).flatMap((x) => x.reads) : [];
+      state.contigs = { ...c, result: { contigs, unplaced, readCount: reads.length }, error: null };
+    } catch (e) { state.contigs = { ...c, result: null, error: e.message }; }
+    render();
+  },
+  openContig(i) {
+    const ct = state.contigs.result?.contigs[i];
+    if (!ct) return;
+    const doc = newDocument({ name: `Contig ${i + 1}`, seq: ct.seq, circular: false });
+    for (const r of ct.layout) {
+      doc.features.push({
+        id: newId(), name: r.name, type: 'misc_feature', strand: r.reverse ? -1 : 1, color: colorFor('misc_feature'),
+        segments: [{ start: r.offset, end: Math.min(ct.length, r.offset + r.length) }], qualifiers: [], extra: {},
+      });
+    }
+    addHistory(doc, 'assembled', `${ct.reads.length} reads, ${ct.length} bp, ${ct.depth}× deep`);
+    openDoc(doc);
+  },
+  setMsa(patch) { state.msa = { ...state.msa, result: null, error: null, ...patch }; render(); },
+  runMsa() {
+    const items = state.msa.ids.map((id) => state.docs.find((d) => d.id === id)).filter(Boolean).map((d) => ({ name: d.name, seq: d.seq }));
+    try { state.msa = { ...state.msa, result: multipleAlign(items), error: null }; } catch (e) { state.msa = { ...state.msa, result: null, error: e.message }; }
+    render();
+  },
+  // ---- search ----
+  setSearch(patch) { state.search = { ...state.search, ...patch }; render(); },
+  runSearch(query) {
+    const q = String(query ?? '').trim();
+    const scope = state.search.scope;
+    state.search = { ...state.search, query: q, results: null, saved: null, error: null };
+    if (!q) { render(); return; }
+    const docsToSearch = scope === 'file' ? [current()] : scope === 'open' ? state.docs : [];
+    const results = docsToSearch.filter(Boolean).map((d) => ({
+      docId: d.id, name: d.name,
+      items: searchAll(d, q).map((hit) => {
+        if (hit.kind === 'sequence') return { start: hit.start, end: hit.end, strand: hit.strand, label: 'sequence match' };
+        const f = d.features.find((x) => x.id === hit.featureId);
+        const span = f ? featureSpan(f) : { start: 0, end: 0 };
+        return { start: span.start, end: span.end, strand: f?.strand ?? 0, label: `${hit.name}${hit.kind === 'qualifier' ? ` · ${hit.field}: ${hit.text}` : ''}` };
+      }),
+    })).filter((r) => r.items.length || scope === 'file');
+    state.search.results = scope === 'saved' ? null : results;
+    render();
+    if (scope === 'saved') {
+      searchCollection(q).then((saved) => { state.search = { ...state.search, saved }; render(); },
+        (e) => { state.search = { ...state.search, error: `Could not search the saved files: ${e.message}` }; render(); });
+    }
+  },
+  goTo(docId, start, end) {
+    const i = state.docs.findIndex((d) => d.id === docId);
+    if (i < 0) return;
+    if (i !== state.active) { state.active = i; state.highlight = null; state.selectedFeatures = new Set(); state.traceBase = null; }
+    state.caret = null;
+    state.selection = end > start ? { start, end } : null;
+    if (state.view === 'map') state.view = 'seq';
+    render();
+  },
+  // ---- saved collections ----
+  setLibraryName(name) { state.library = { ...state.library, name }; },
+  refreshLibrary() {
+    state.library = { ...state.library, loading: true, error: null };
+    listCollection().then((records) => { state.library = { ...state.library, records, loading: false }; render(); },
+      (e) => { state.library = { ...state.library, records: [], loading: false, error: `Saved files are not available here: ${e.message}` }; render(); });
+  },
+  async saveCurrentToCollection() {
+    const doc = current();
+    if (!doc) return;
+    try { await saveToCollection(doc, state.library.name); toast(`Saved ${doc.name}`); api.refreshLibrary(); } catch (e) { toast(`Could not save: ${e.message}`, 'error'); }
+  },
+  async saveAllToCollection() {
+    try { for (const d of state.docs) await saveToCollection(d, state.library.name); toast(`Saved ${state.docs.length} files`); api.refreshLibrary(); } catch (e) { toast(`Could not save: ${e.message}`, 'error'); }
+  },
+  async openSaved(id) {
+    try {
+      const doc = await getFromCollection(id);
+      if (!doc) { toast('That file is no longer saved', 'error'); return; }
+      const copy = cloneDoc(doc);
+      copy.id = newId(); // the saved copy stays as it was
+      openDoc(copy);
+    } catch (e) { toast(`Could not open: ${e.message}`, 'error'); }
+  },
+  async deleteSaved(id) { try { await removeFromCollection(id); api.refreshLibrary(); } catch (e) { toast(`Could not remove: ${e.message}`, 'error'); } },
+  async exportCollection() {
+    try {
+      const records = state.library.records ?? [];
+      const docs = [];
+      for (const r of records) { const d = await getFromCollection(r.id); if (d) docs.push(d); }
+      const result = await saveDocument({ data: projectToJSON(docs, { active: 0, settings: {} }), name: `${state.library.name.replace(/[^\w.-]+/g, '_') || 'collection'}.json`, types: [{ description: 'BublaGene project', accept: { 'application/json': ['.json'] } }] });
+      toast(result.method === 'download' ? 'Project downloaded' : 'Project saved');
+    } catch (e) { toast(`Could not export: ${e.message}`, 'error'); }
+  },
+  // ---- export and print ----
+  async exportMap(kind) {
+    const doc = current();
+    const svg = el('view').querySelector('.mapwrap svg');
+    if (!doc || !svg) { toast('Switch to the map view to export it', 'error'); return; }
+    const exp = exportableSvg(svg);
+    const base = doc.name.replace(/[^\w.-]+/g, '_') || 'map';
+    try {
+      if (kind === 'svg') download(svgBlob(exp), `${base}.svg`);
+      else if (kind === 'png') download(await pngBlob(exp), `${base}.png`);
+      else if (kind === 'pdf') download(await pdfBlob(exp, { title: doc.name, subtitle: `${fmt(doc.seq.length)} bp · ${doc.circular ? 'circular' : 'linear'}` }), `${base}.pdf`);
+      toast(`Exported ${base}.${kind}`);
+    } catch (e) { toast(`Could not export: ${e.message}`, 'error'); }
+  },
+  print() { window.print(); },
   copyFragment() {
     const doc = current();
     if (!doc || !state.selection) return;
@@ -886,6 +1067,11 @@ function renderViewBar(doc) {
         onchange: (e) => { state.orfMin = Math.max(20, Number(e.target.value) || 100); render(); },
       }), 'aa'));
   }
+  if (state.view === 'map' || state.view === 'split') {
+    opts.append(h('label', { class: 'sub', style: { display: 'flex', gap: '4px', alignItems: 'center' } }, 'Map style',
+      h('select', { id: 'mapStyle', onchange: (e) => api.setMapStyle(e.target.value), style: { padding: '2px 4px' } },
+        [['auto', 'as the file'], ['circular', 'circular'], ['linear', 'linear']].map(([v, t]) => h('option', { value: v, selected: state.mapStyle === v }, t)))));
+  }
   const sel = state.selection;
   ops.append(h('button', { class: 'btn', disabled: !sel, onclick: deleteSelection }, 'Delete'));
   ops.append(h('button', { class: 'btn', disabled: !sel, onclick: replaceSelection }, 'Replace…'));
@@ -895,6 +1081,13 @@ function renderViewBar(doc) {
     onclick: () => edit('Set origin', (d) => { rotateOrigin(d, sel.start); }),
   }, 'Set origin'));
   ops.append(h('button', { class: 'btn', onclick: () => edit('Reverse complement', (d) => reverseComplementDoc(d)) }, 'Rev. comp.'));
+  ops.append(h('select', {
+    id: 'exportMenu', class: 'btn', title: 'Export or print',
+    onchange: (e) => { const v = e.target.value; e.target.value = ''; if (v === 'print') api.print(); else if (v) api.exportMap(v); },
+  },
+  h('option', { value: '' }, 'Export…'),
+  h('option', { value: 'svg' }, 'Map as SVG'), h('option', { value: 'png' }, 'Map as PNG'), h('option', { value: 'pdf' }, 'Map as PDF'),
+  h('option', { value: 'print' }, 'Print…')));
 }
 
 function renderStatus(doc) {
@@ -1114,43 +1307,64 @@ function renderView(doc) {
     addEventListener('resize', () => tv.refresh?.(), { once: true });
     return;
   }
+  const mapNode = () => ((state.mapStyle === 'auto' ? doc.circular : state.mapStyle === 'circular') ? circularMap : linearMap)(doc, opts);
+  const mapBox = (extra = {}) => {
+    const wrap = h('div', { class: 'mapwrap', ...extra });
+    wrap.append(mapNode());
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) { state.highlight = null; state.selection = null; state.caret = null; render(); } });
+    return wrap;
+  };
   if (state.view === 'map') {
-    const wrap = h('div', { class: 'mapwrap' });
-    wrap.append(doc.circular ? circularMap(doc, opts) : linearMap(doc, opts));
-    wrap.addEventListener('click', (e) => { if (e.target === wrap) { state.highlight = null; state.selection = null; render(); } });
-    view.append(wrap);
-  } else {
-    const sv = sequenceView(doc, {
-      ...opts,
-      // While the pointer is down the view repaints itself; rebuilding it here
-      // would drop the drag. Only once the drag ends do the panels catch up.
-      onSelect: (sel, info) => {
-        state.selection = sel;
-        state.selAnchor = null;
-        state.selHead = null;
-        if (sel) state.caret = null;
-        else if (info && 'caret' in info && info.caret !== null) state.caret = info.caret;
-        renderStatus(doc);
-        if (!info?.live) { syncHighlight(); render(); }
-      },
-      showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
-      reads: readsFor(doc), caret: state.selection ? null : state.caret,
-    });
-    view.append(sv);
-    view.onscroll = () => sv.onScroll?.();
-    if (wasScrolled) {
-      requestAnimationFrame(() => { view.scrollTop = wasScrolled; sv.onScroll?.(); });
-    }
+    view.append(mapBox());
+    return;
+  }
+  const buildSequence = () => sequenceView(doc, {
+    ...opts,
+    // While the pointer is down the view repaints itself; rebuilding it here
+    // would drop the drag. Only once the drag ends do the panels catch up.
+    onSelect: (sel, info) => {
+      state.selection = sel;
+      state.selAnchor = null;
+      state.selHead = null;
+      if (sel) state.caret = null;
+      else if (info && 'caret' in info && info.caret !== null) state.caret = info.caret;
+      renderStatus(doc);
+      if (!info?.live) { syncHighlight(); render(); }
+    },
+    showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
+    reads: readsFor(doc), caret: state.selection ? null : state.caret,
+  });
+  if (state.view === 'split') {
+    // the map on top, the sequence beneath it in its own scrolling box
+    const box = h('div', { class: 'split' });
+    const scroller = h('div', { class: 'splitseq' });
+    const sv = buildSequence();
+    scroller.append(sv);
+    box.append(mapBox({ class: 'mapwrap splitmap' }), scroller);
+    view.append(box);
+    scroller.onscroll = () => { state.splitScroll = scroller.scrollTop; sv.onScroll?.(); };
+    if (state.splitScroll) requestAnimationFrame(() => { scroller.scrollTop = state.splitScroll; sv.onScroll?.(); });
+    return;
+  }
+  const sv = buildSequence();
+  view.append(sv);
+  view.onscroll = () => sv.onScroll?.();
+  if (wasScrolled) {
+    requestAnimationFrame(() => { view.scrollTop = wasScrolled; sv.onScroll?.(); });
   }
 }
 
 function renderPanels(doc) {
   const tabs = clear(el('panelTabs'));
-  for (const name of PANELS) {
-    tabs.append(h('button', {
-      role: 'tab', 'aria-selected': String(state.panel === name),
-      onclick: () => { state.panel = name; render(); el('panel').scrollTop = 0; },
-    }, name));
+  for (const [group, names] of PANEL_GROUPS) {
+    const box = h('div', { class: 'tabgroup', role: 'presentation' }, names.length > 1 ? h('span', { class: 'grouplabel' }, group) : null);
+    for (const name of names) {
+      box.append(h('button', {
+        role: 'tab', 'aria-selected': String(state.panel === name),
+        onclick: () => { state.panel = name; render(); el('panel').scrollTop = 0; },
+      }, name));
+    }
+    tabs.append(box);
   }
   const panel = clear(el('panel'));
   if (!doc) { panel.append(h('p', { class: 'empty' }, 'Open a file to see its details.')); return; }
@@ -1353,7 +1567,18 @@ document.addEventListener('copy', (e) => {
   toast(`Copied ${fmt(picked.length)} bases`);
 });
 
-window.addEventListener('resize', () => { if (state.view === 'seq') renderView(current()); });
+window.addEventListener('resize', () => { if (state.view === 'seq' || state.view === 'split') renderView(current()); });
+
+// The printed page is a sheet built for paper, complete however little of the
+// sequence is on screen; it exists only while printing.
+function buildPrintSheet() {
+  const doc = current();
+  const root = document.getElementById('printRoot');
+  if (!root || !doc) return;
+  root.replaceChildren(printSheet(doc, { sites: shownSites(doc), style: state.mapStyle, overlays: overlaysFor(doc) }));
+}
+window.addEventListener('beforeprint', buildPrintSheet);
+window.addEventListener('afterprint', () => { document.getElementById('printRoot')?.replaceChildren(); });
 
 // write the session out before the tab goes away, rather than waiting out the debounce
 addEventListener('pagehide', remember);

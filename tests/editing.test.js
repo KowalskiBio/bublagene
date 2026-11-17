@@ -104,9 +104,9 @@ test('typing, Backspace, arrows and paste edit the sequence at the caret', async
     <select id="saveAs"><option value="">Save as…</option></select>
     <button id="undoBtn"></button><button id="redoBtn"></button><button id="themeBtn"></button>
     <input type="file" id="fileInput" multiple>
-    <div id="viewSeg"><button data-view="map" aria-pressed="true">Map</button><button data-view="seq">Sequence</button><button data-view="trace" hidden>Trace</button></div>
+    <div id="viewSeg"><button data-view="map" aria-pressed="true">Map</button><button data-view="seq">Sequence</button><button data-view="split">Split</button><button data-view="trace" hidden>Trace</button></div>
     <div id="viewOpts"></div><div id="editOps"></div><div id="view"></div><div id="status"></div>
-    <div id="panelTabs"></div><div id="panel"></div><div id="toast" hidden></div></body></html>`, { url: 'http://localhost/', pretendToBeVisual: true });
+    <div id="panelTabs"></div><div id="panel"></div><div id="toast" hidden></div><div id="printRoot"></div></body></html>`, { url: 'http://localhost/', pretendToBeVisual: true });
   const { window } = dom;
   Object.assign(globalThis, {
     window, document: window.document, HTMLElement: window.HTMLElement, Node: window.Node, Blob: window.Blob,
@@ -187,6 +187,24 @@ test('typing, Backspace, arrows and paste edit the sequence at the caret', async
     await tick();
     assert.ok($('#panel').textContent.trim().length > 40, `${mode} section has content`);
   }
+  // the rest of the panels, and the map-with-sequence view
+  for (const name of ['Plot', 'Protein', 'Contigs', 'Search', 'Library', 'History', 'Digest', 'Alignment']) {
+    [...window.document.querySelectorAll('#panelTabs button')].find((b) => b.textContent === name).click();
+    await tick();
+    assert.ok($('#panel').textContent.trim().length > 20, `${name} panel has content`);
+  }
+  $('#viewSeg [data-view="split"]').click();
+  await tick(60);
+  assert.ok($('#view .split svg') && $('#view .splitseq'), 'map above, sequence below');
+  [...window.document.querySelectorAll('#panelTabs button')].find((b) => b.textContent === 'History').click();
+  await tick();
+  assert.match($('#panel').textContent, /Original/, 'the edits made above are listed');
+  [...window.document.querySelectorAll('#panel .row')][0].click();
+  await tick();
+  assert.match(status(), /0 bp/, 'the original of this file is empty: it began with Add sequence');
+  [...window.document.querySelectorAll('#panel .row')][1].click();
+  await tick();
+  assert.match(status(), /10 bp/, 'and the first step brings the sequence back');
   [...window.document.querySelectorAll('#panelTabs button')].find((b) => b.textContent === 'Detect').click();
   await tick();
   [...window.document.querySelectorAll('#panel button')].find((b) => b.textContent === 'Detect features').click();

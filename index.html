@@ -135,6 +135,8 @@ main { flex: 1 1 auto; display: flex; min-height: 0; }
   display: flex; flex-direction: column; min-height: 0;
 }
 .paneltabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); flex: none; }
+.tabgroup { display: flex; flex-wrap: wrap; align-items: center; flex: 1 1 auto; }
+.grouplabel { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 0 6px 0 10px; opacity: .8; }
 .paneltabs button {
   flex: 1 0 auto; border: none; background: none; padding: 9px 10px; cursor: pointer;
   color: var(--muted); border-bottom: 2px solid transparent; font-size: 13px; white-space: nowrap;
@@ -220,6 +222,11 @@ table.data tr:hover td { background: var(--sunk); }
 }
 .seqline .fbar { cursor: pointer; }
 
+/* ---- map and sequence together ---- */
+.split { display: flex; flex-direction: column; height: 100%; }
+.mapwrap.splitmap { flex: 0 0 44%; min-height: 200px; height: auto; padding: 6px; }
+.splitseq { flex: 1 1 auto; overflow: auto; min-height: 0; position: relative; border-top: 1px solid var(--line); }
+
 /* ---- map ---- */
 .mapwrap { display: grid; place-items: center; padding: 12px; height: 100%; min-height: 420px; }
 .mapwrap svg { width: 100%; max-width: 100%; max-height: 100%; height: auto; }
@@ -250,8 +257,8 @@ svg text { font-family: var(--font-sans); }
 
 /* ---- gel ---- */
 .gel { background: #11161a; border-radius: 8px; padding: 12px 8px; display: flex; gap: 10px; align-items: stretch; }
-.lane { flex: 1 1 0; position: relative; min-height: 300px; }
-.lane .caption { position: absolute; top: -2px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: #8ba09d; }
+.lane { min-width: 0; flex: 1 1 0; position: relative; min-height: 300px; }
+.lane .caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 1px; position: absolute; top: -2px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: #8ba09d; }
 .band { position: absolute; left: 6%; right: 6%; height: 3px; border-radius: 2px; background: #cfe9e3; }
 .band span { position: absolute; left: calc(100% + 5px); top: -6px; font-size: 10px; color: #8ba09d; white-space: nowrap; }
 .lane.ladder .band span { left: auto; right: calc(100% + 5px); }
@@ -311,6 +318,24 @@ ul.tree.root { border-left: none; padding-left: 0; margin-left: 0; }
   .canvas { min-height: 56vh; }
   :root { --rail: auto; }
 }
+/* ---- printing: a sheet built for paper replaces the app ---- */
+#printRoot { display: none; }
+@media print {
+  @page { margin: 14mm; }
+  body { display: block; overflow: visible; height: auto; background: #fff; color: #000; }
+  .topbar, main, #toast, .ctxmenu { display: none !important; }
+  #printRoot { display: block; }
+  .printsheet { font: 11pt/1.4 Helvetica, Arial, sans-serif; color: #000; }
+  .printsheet h1 { font-size: 18pt; margin: 0 0 2pt; }
+  .printsheet h2 { font-size: 12pt; margin: 14pt 0 4pt; break-after: avoid; }
+  .printsheet p { margin: 0 0 6pt; color: #333; }
+  .printsheet table { border-collapse: collapse; width: 100%; font-size: 9pt; }
+  .printsheet th, .printsheet td { border-bottom: .5pt solid #bbb; padding: 2pt 4pt; text-align: left; }
+  .printsheet tr { break-inside: avoid; }
+  .printsheet .seq { font: 8.5pt/1.4 "Courier New", monospace; }
+  .printsheet pre.seq { white-space: pre-wrap; margin: 0; }
+  .printmap svg { display: block; max-width: 100%; max-height: 10cm; height: auto; margin: 6pt auto; break-inside: avoid; }
+}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
@@ -334,7 +359,7 @@ ul.tree.root { border-left: none; padding-left: 0; margin-left: 0; }
     <a class="btn icon" href="https://github.com/KowalskiBio/bublagene" target="_blank" rel="noopener"
        title="Source code (AGPL-3.0)" style="text-decoration:none">&lt;/&gt;</a>
   </div>
-  <input type="file" id="fileInput" accept=".dna,.gb,.gbk,.genbank,.gbff,.fasta,.fa,.fna,.seq,.txt,.json" multiple hidden>
+  <input type="file" id="fileInput" accept=".dna,.gb,.gbk,.genbank,.gbff,.fasta,.fa,.fna,.seq,.txt,.json,.pdb,.ent" multiple hidden>
 </header>
 
 <main>
@@ -343,6 +368,7 @@ ul.tree.root { border-left: none; padding-left: 0; margin-left: 0; }
       <div class="seg" id="viewSeg">
         <button data-view="map" aria-pressed="true">Map</button>
         <button data-view="seq" aria-pressed="false">Sequence</button>
+        <button data-view="split" aria-pressed="false" title="Map above, sequence below">Map + sequence</button>
         <button data-view="trace" aria-pressed="false" hidden>Chromatogram</button>
       </div>
       <div class="group" id="viewOpts"></div>
@@ -360,6 +386,7 @@ ul.tree.root { border-left: none; padding-left: 0; margin-left: 0; }
 </main>
 
 <div id="toast" hidden></div>
+<div id="printRoot" aria-hidden="true"></div>
 <script type="module" src="js/ui/app.js"></script>
 </body>
 </html>
