@@ -6,10 +6,11 @@ import { revcomp, translate } from '../seq.js';
 import { api } from './api/index.js';
 import { addFeatureFromSelection, addPrimerFromSelection, copy, selectedSeq } from './clipboard.js';
 import { current, render, state } from './core.js';
-import { deleteSelection, edit, replaceSelection } from './documents.js';
+import { deleteSelection, edit, replaceSelection, swapFeatureSequence } from './documents.js';
 import { fmt } from './dom.js';
 import { showMenu } from './menu.js';
 import { isOrf, isPrimer } from './overlays.js';
+import { showSwapDialog } from './swapdialog.js';
 import { overlaysFor } from './viewdata.js';
 
 function featureFromEvent(ev) {
@@ -44,6 +45,11 @@ export function openContextMenu(ev) {
     if (feature.type === 'CDS') {
       items.push({ label: 'Copy protein', onClick: () => copy(translate(codingSequence(doc, feature)), 'residues') });
     }
+    items.push({
+      label: 'Swap sequence…',
+      disabled: feature.segments.length !== 1,
+      onClick: () => showSwapDialog(doc, feature, (seq) => swapFeatureSequence(feature, seq)),
+    });
     items.push({ label: 'Delete feature', danger: true, onClick: () => edit(`Delete ${feature.name}`, (d) => { d.features = d.features.filter((x) => x.id !== feature.id); }) });
     items.push('-');
   }

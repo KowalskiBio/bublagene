@@ -204,6 +204,33 @@ export function replaceRange(doc, start, end, insert) {
   recomputeFeatures(doc);
 }
 
+// Swap a feature's bases for new ones. `seq` is written in the feature's own
+// direction, so on the reverse strand it is reverse-complemented into place.
+// The feature keeps its name, type, colour and qualifiers and grows or shrinks
+// to the new length; features around it shift with the sequence, and features
+// that sat entirely inside it go, since the bases they described are gone.
+// Returns { start, end, delta, removed }, or throws if the swap is not possible.
+export function swapFeature(doc, featureId, seq) {
+  const f = doc.features.find((x) => x.id === featureId);
+  if (!f) throw new Error('That feature no longer exists');
+  if (f.segments.length !== 1) throw new Error('Swap works on a feature with one stretch of sequence, not a joined one');
+  const { start, end } = f.segments[0];
+  if (doc.circular && end <= start) throw new Error('This feature runs across the origin; set the origin elsewhere first');
+  const text = String(seq).toUpperCase();
+  if (!text) throw new Error('Nothing to swap in');
+  const oldLen = end - start;
+  const before = doc.features.length;
+  const index = doc.features.indexOf(f);
+  const keep = { ...f, segments: [{ ...f.segments[0] }] };
+  replaceRange(doc, start, end, f.strand === -1 ? revcompLocal(text) : text);
+  // replaceRange leaves nothing of the swapped feature; put it back over the new bases
+  keep.segments[0] = { ...keep.segments[0], start, end: start + text.length };
+  const removed = before - 1 - doc.features.length; // the others that were inside the old bases
+  doc.features.splice(Math.min(index, doc.features.length), 0, keep);
+  recomputeFeatures(doc);
+  return { start, end: start + text.length, delta: text.length - oldLen, removed };
+}
+
 // Range of `len` bases starting at `start`. Ends are kept in 1..L, so a range
 // ending at the origin has end === L, and a wrapping range has end <= start.
 export function normRange(start, len, L) {

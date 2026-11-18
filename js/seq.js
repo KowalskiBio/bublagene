@@ -25,6 +25,21 @@ export function revcomp(s) {
   return complement(s).split('').reverse().join('');
 }
 
+// Read a sequence pasted from anywhere: FASTA header lines, numbers, spaces and
+// line breaks are dropped, U becomes T, and letters that are not IUPAC bases are
+// left out and counted, so the caller can say so.
+export function readPastedSequence(text) {
+  const body = String(text).split(/\r?\n/).filter((line) => !line.trimStart().startsWith('>')).join('');
+  let seq = '';
+  let ignored = 0;
+  for (const ch of body.toUpperCase()) {
+    if (!/[A-Z]/.test(ch)) continue; // digits, spaces, dashes and punctuation are layout
+    const c = ch === 'U' ? 'T' : ch;
+    if ('ACGTNRYSWKMBDHV'.includes(c)) seq += c; else ignored++;
+  }
+  return { seq, ignored };
+}
+
 export function cleanSequence(s) {
   return s.replace(/[^A-Za-z]/g, '').toUpperCase();
 }

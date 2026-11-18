@@ -80,6 +80,11 @@ Mutate, CRISPR), **Enzymes** (Enzymes, Digest), **Cloning**, **Analyse**
 - Feature editing covers name, type, strand, colour and arbitrary qualifiers.
   Features can be multi-selected, reordered by drag, and copied, cut and pasted
   as annotations (positions kept relative to each other).
+- Right-click a feature on the map or the sequence and choose **Swap sequence…**
+  to replace its bases with a pasted sequence (plain text or FASTA, written in
+  the feature's own direction). The feature keeps its name, colour and
+  qualifiers and takes the new length, everything around it shifts to match, and
+  annotations that sat wholly inside it are removed. One undo reverses it.
 - Fragments copy and paste across documents. Undo and redo coalesce bursts of
   typing, and the **History** panel lists every step so you can jump to any of
   them. Autosave keeps an IndexedDB session plus a small recovery mirror.

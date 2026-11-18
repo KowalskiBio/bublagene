@@ -6,7 +6,7 @@ import { readAlignments } from '../formats/bam.js';
 import { readTraces } from '../formats/ztr.js';
 import { placeRead } from '../readalign.js';
 import { readTrace, traceToDocument } from '../traces.js';
-import { addHistory, newId, cloneDoc, featureSpan, replaceRange } from '../model.js';
+import { addHistory, newId, swapFeature, cloneDoc, featureSpan, replaceRange } from '../model.js';
 import { cleanSequence } from '../seq.js';
 import { History } from '../undo.js';
 import { alignments, current, isDirty, render, state, traces, undo } from './core.js';
@@ -156,6 +156,23 @@ export function replaceSelection() {
   edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); }, { redraw: false });
   state.selection = { start: sel.start, end: sel.start + seq.length };
   render();
+}
+
+// Swap a feature's bases for ones the reader pasted, keeping its annotation.
+export function swapFeatureSequence(feature, seq) {
+  let result;
+  try {
+    edit(`Swap ${feature.name}`, (d) => { result = swapFeature(d, feature.id, seq); }, { redraw: false });
+  } catch (e) {
+    toast(e.message, 'error');
+    render();
+    return;
+  }
+  state.selection = { start: result.start, end: result.end };
+  state.highlight = feature.id;
+  render();
+  const d = result.delta;
+  toast(`Swapped ${feature.name}: ${d === 0 ? 'same length' : `${d > 0 ? '+' : '−'}${Math.abs(d).toLocaleString('en-US')} bp`}${result.removed ? `, ${result.removed} annotation${result.removed === 1 ? '' : 's'} inside removed` : ''}`);
 }
 
 export function deleteSelection() {
