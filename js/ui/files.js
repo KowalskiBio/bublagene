@@ -9,7 +9,8 @@ import { findBindingSites } from '../primers.js';
 import { projectFromJSON, projectToJSON } from '../project.js';
 import { openDocument, saveDocument } from '../storage.js';
 import { alignments, current, render, state } from './core.js';
-import { openDoc } from './documents.js';
+import { openDoc, openTraceFile } from './documents.js';
+import { traceFormat } from '../traces.js';
 import { toast } from './dom.js';
 
 export async function readFileData(file) {
@@ -22,8 +23,12 @@ export async function readFileText(file) {
   return new TextDecoder().decode(await readFileData(file));
 }
 
+const TRACE_EXT = /\.(ab1|abi|scf|ztr)$/i;
+
 export async function openFiles(files) {
-  for (const file of files) {
+  // references first, so a read opened in the same batch has something to align to
+  const ordered = [...files].sort((a, b) => TRACE_EXT.test(a.name) - TRACE_EXT.test(b.name));
+  for (const file of ordered) {
     try {
       const lower = file.name.toLowerCase();
       if (lower.endsWith('.pdb') || lower.endsWith('.ent')) {
@@ -37,11 +42,18 @@ export async function openFiles(files) {
         const doc = readDna(await readFileData(file), file.name);
         openDoc(doc);
         for (const w of doc.source.warnings ?? []) toast(w);
+      } else if (TRACE_EXT.test(lower)) {
+        await openTraceFile(await readFileData(file), file.name);
       } else if (lower.endsWith('.json')) {
         const project = projectFromJSON(await readFileText(file));
         for (const d of project.docs) openDoc(d);
         if (project.warnings.length) toast(project.warnings[0]);
       } else {
+        // a chromatogram with an unexpected extension is still recognised by its first bytes
+        if (file.data || typeof file.arrayBuffer === 'function') {
+          const bytes = await readFileData(file);
+          if (traceFormat(bytes)) { await openTraceFile(bytes, file.name); continue; }
+        }
         const text = (await readFileText(file)).replace(/^\uFEFF/, '');
         const docs = /^LOCUS/m.test(text) ? readGenBank(text, file.name)
           : text.trimStart().startsWith('>') ? readFasta(text, file.name)

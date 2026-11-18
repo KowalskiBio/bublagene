@@ -177,8 +177,14 @@ a fragment library can be batch-assembled from the command line.
 
 ### Traces
 
-- ABI (`.ab1`), SCF and ZTR chromatograms with four dye channels, called bases,
-  peak positions and Phred qualities.
+- ABI (`.ab1`, `.abi`), SCF and ZTR chromatograms with four dye channels, called
+  bases, peak positions and Phred qualities.
+- Open a read with a reference (`.gb`, `.dna`, FASTA) already open and it is
+  aligned to that reference in either orientation: it appears as a row under the
+  sequence (dots for matches, letters for mismatches, a marker for insertions)
+  and its chromatogram is behind the Chromatogram view. A read that does not
+  match the reference opens as its own document. Files are recognised by their
+  first bytes, so the extension does not matter.
 - Mott and Phred trimming, trim features and synchronised trace-to-reference
   navigation.
 - Trace bases map back to the reference through an alignment; “Show in sequence”
@@ -365,6 +371,7 @@ js/
   protein.js          mass, pI, hydropathy and motif scan; pdb.js reads Cα traces
   tracks.js           GC content and skew along a sequence
   traces.js           trace trimming, slicing and reference mapping
+  readalign.js        place a Sanger read on a reference (k-mer seed, local alignment)
   fragment.js         fragment and feature copy/paste, feature reordering
   cache.js            digest-keyed caches and stale-alignment invalidation
   undo.js             coalescing undo/redo with a jumpable timeline

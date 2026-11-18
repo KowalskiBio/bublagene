@@ -49,7 +49,12 @@ export function renderView(doc) {
       onPickBase: (k, trace) => {
         state.traceBase = k;
         const doc2 = current();
-        if (doc2) {
+        if (doc2 && trace.refMap) {
+          // a read placed on this reference already knows where each base sits
+          const position = trace.refMap[k];
+          if (position != null) state.selection = { start: position, end: position + 1 };
+          toast(`Trace base ${k + 1}: ${trace.bases[k]}${position != null ? ` → reference ${position + 1}` : ''}${trace.confidence ? ` · quality ${trace.confidence[k] ?? '?'}` : ''}`);
+        } else if (doc2) {
           if (doc2.seq.length * trace.bases.length > 2_000_000) {
             toast('This trace is too large to map onto the reference automatically', 'error');
             return;
@@ -76,6 +81,15 @@ export function renderView(doc) {
       onLocate: (k, trace) => {
         const doc2 = current();
         if (!doc2) return;
+        if (trace.refMap) {
+          const at = trace.refMap[k];
+          if (at == null) { toast('This trace base has no reference position', 'error'); return; }
+          state.selection = { start: at, end: at + 1 };
+          state.view = 'seq';
+          render();
+          toast(`Showing reference base ${at + 1}`);
+          return;
+        }
         if (doc2.seq.length * trace.bases.length > 2_000_000) { toast('This trace is too large to map onto the reference automatically', 'error'); return; }
         let position;
         try { position = traceBaseToReference(doc2.seq, trace, k).map[k]; } catch (e) { toast(`Could not map the trace: ${e.message}`, 'error'); return; }

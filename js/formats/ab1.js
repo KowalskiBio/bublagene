@@ -139,7 +139,7 @@ export function readAB1(buffer, fileName = 'trace.ab1') {
     // ABI PLOC is 1-based in practice; a first peak at 0 is already 0-based.
     for (let i = 0; i < positions.length; i++) positions[i] -= 1;
   }
-  const name = nameEntry ? pleasant(buf, nameEntry).replace(/\0+$/, '') : fileName.replace(/\.ab1$/i, '');
+  const name = nameEntry ? pleasant(buf, nameEntry).replace(/\0+$/, '') : fileName.replace(/\.(ab1|abi)$/i, '');
   if (!sampleCount && !bases.length) throw new Error('ABI trace has no samples or bases');
   return {
     format: 'AB1',

@@ -4,7 +4,9 @@
 import { ENZYME_BY_NAME, findSites } from '../enzymes.js';
 import { readAlignments } from '../formats/bam.js';
 import { readTraces } from '../formats/ztr.js';
-import { addHistory, cloneDoc, featureSpan, replaceRange } from '../model.js';
+import { placeRead } from '../readalign.js';
+import { readTrace, traceToDocument } from '../traces.js';
+import { addHistory, newId, cloneDoc, featureSpan, replaceRange } from '../model.js';
 import { cleanSequence } from '../seq.js';
 import { History } from '../undo.js';
 import { alignments, current, isDirty, render, state, traces, undo } from './core.js';
@@ -25,6 +27,38 @@ export async function loadAlignment(doc) {
   } catch (e) {
     toast(`Could not read the traces in ${doc.name}: ${e.message}`, 'error');
   }
+}
+
+// Open a chromatogram file. With a reference open (a .gb or .dna the user
+// opened first) the read is aligned to it and added as a row under the
+// sequence, with its chromatogram behind the Trace view. Otherwise, or if the
+// read does not match, it opens as a document of its own.
+export async function openTraceFile(buffer, fileName) {
+  const trace = { id: newId(), ...(await readTrace(buffer, fileName)) };
+  if (!trace.name) trace.name = fileName.replace(/\.[^.]+$/, '');
+  const ref = current();
+  if (ref && ref.seq.length && ref.source?.format !== 'trace') {
+    const read = placeRead(ref.seq, trace, { label: trace.name });
+    if (read) {
+      trace.reverse = read.reverse;
+      trace.refMap = read.map;
+      const { map, ...row } = read;
+      const reads = [...(alignments.get(ref.id) ?? []), { ...row, pos: row.start }].sort((a, b) => a.start - b.start || a.label.localeCompare(b.label));
+      alignments.set(ref.id, reads);
+      traces.set(ref.id, [...(traces.get(ref.id) ?? []), trace]);
+      state.showReads = true;
+      render();
+      toast(`${trace.name}: aligned to ${ref.name} at ${read.start + 1}–${read.end}, ${read.identity.toFixed(1)}% identity${read.reverse ? ', reverse strand' : ''}`);
+      return;
+    }
+    toast(`${trace.name} does not match ${ref.name}; opened on its own`, 'error');
+  }
+  const doc = traceToDocument(trace);
+  openDoc(doc);
+  traces.set(doc.id, [trace]);
+  state.view = 'trace';
+  state.trace = 0;
+  render();
 }
 
 export function openDoc(doc) {
