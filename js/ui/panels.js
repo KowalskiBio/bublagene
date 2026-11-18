@@ -895,7 +895,7 @@ function file(el, { doc, state, api }) {
   el.append(h('div', { class: 'group', style: { marginTop: '6px' } },
     h('button', { class: 'btn', onclick: () => api.saveProject() }, 'Save project…'),
     h('button', { class: 'btn', onclick: () => api.openProject() }, 'Open project…')));
-  el.append(h('p', { class: 'sub' }, 'Projects keep every open document, its features, primers, cloning and assembly records, alignments and settings.'));
+  el.append(h('p', { class: 'sub' }, 'A project file keeps every open tab (documents, features, primers, cloning and assembly records), the reads and chromatograms opened against them, which tab was in front, and your settings. The browser also remembers your tabs between visits.'));
   el.append(h('label', { class: 'field' }, h('span', {}, 'Name'),
     h('input', { value: doc.name, onchange: (e) => api.edit('Rename', (d) => { d.name = e.target.value; }) })));
   el.append(h('label', { class: 'field' }, h('span', {}, 'Topology'),

@@ -52,12 +52,17 @@ export function welcome() {
 export function restoreCard(saved) {
   const docs = saved.docs ?? [];
   const list = h('ul', { style: { listStyle: 'none', padding: '0', margin: '0 0 20px' } });
+  const reads = (id) => (saved.attached?.alignments ?? []).find((e) => e.docId === id)?.reads?.length ?? 0;
+  const curves = (id) => (saved.attached?.traces ?? []).find((e) => e.docId === id)?.traces?.length ?? 0;
   for (const d of docs) {
+    const r = reads(d.id);
+    const c = curves(d.id);
     list.append(h('li', {
       style: { display: 'flex', gap: '10px', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid var(--line)' },
     },
       h('span', { style: { fontWeight: '500' } }, d.name),
       h('span', { class: 'sub' }, `${fmt((d.seq ?? '').length)} bp · ${d.circular ? 'circular' : 'linear'}`),
+      r || c ? h('span', { class: 'sub' }, `· ${[r ? `${r} read${r === 1 ? '' : 's'}` : '', c ? `${c} chromatogram${c === 1 ? '' : 's'}` : ''].filter(Boolean).join(', ')}`) : null,
       d.restoredDirty ? h('span', { class: 'sub', style: { color: 'var(--accent)' } }, '· unsaved changes') : null));
   }
   return h('div', { class: 'welcome' },

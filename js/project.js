@@ -37,6 +37,35 @@ function serialiseDoc(doc) {
   };
 }
 
+// A trace's dye curves are four long runs of 16-bit numbers; as JSON arrays they
+// would dwarf the rest of the project, so they travel as base64.
+const toBase64 = (u16) => {
+  const bytes = new Uint8Array(u16.buffer, u16.byteOffset, u16.byteLength);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+const fromBase64 = (text) => {
+  const bin = atob(text);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Uint16Array(bytes.buffer, 0, bytes.length >> 1);
+};
+
+export function encodeTrace(trace) {
+  const samples = {};
+  for (const c of 'ACGT') samples[c] = toBase64(Uint16Array.from(trace.samples?.[c] ?? []));
+  return { ...clone({ ...trace, samples: undefined }), samples, encoded: 'u16-base64' };
+}
+
+export function decodeTrace(record) {
+  if (record.encoded !== 'u16-base64') return record;
+  const samples = {};
+  for (const c of 'ACGT') samples[c] = fromBase64(record.samples?.[c] ?? '');
+  const { encoded, ...rest } = record;
+  return { ...rest, samples };
+}
+
 export function projectRecord(docs, {
   settings = {}, alignments = {}, traces = {}, active = 0, created = new Date().toISOString(), name = null,
 } = {}) {
@@ -45,8 +74,8 @@ export function projectRecord(docs, {
     ? [...alignments.entries()].map(([docId, reads]) => ({ docId, reads: clone(reads ?? []) }))
     : clone(alignments ?? []);
   const tr = traces instanceof Map
-    ? [...traces.entries()].map(([docId, list]) => ({ docId, traces: clone(list ?? []) }))
-    : clone(traces ?? []);
+    ? [...traces.entries()].map(([docId, list]) => ({ docId, traces: (list ?? []).map(encodeTrace) }))
+    : (Array.isArray(traces) ? traces : []).map((e) => ({ ...e, traces: (e.traces ?? []).map((t) => (t.encoded ? t : encodeTrace(t))) }));
   return {
     schema: PROJECT_SCHEMA,
     created,
@@ -171,7 +200,7 @@ export function projectFromJSON(value) {
     docs,
     settings: clone(record.settings ?? {}),
     alignments: clone(record.alignments ?? []),
-    traces: clone(record.traces ?? []),
+    traces: (record.traces ?? []).map((e) => ({ docId: e.docId, traces: (e.traces ?? []).map(decodeTrace) })),
     active: Math.max(0, Math.min(Number(record.active) || 0, Math.max(0, docs.length - 1))),
     name: record.name ?? docs[0]?.name ?? 'project',
     created: record.created ?? null,

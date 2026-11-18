@@ -6,6 +6,7 @@ import { cloneDoc } from '../model.js';
 import { readAutosave, writeAutosave } from '../storage.js';
 import { History } from '../undo.js';
 import { isDirty, render, state, undo } from './core.js';
+import { collectAttached, restoreAttached } from './attached.js';
 import { loadAlignment } from './documents.js';
 import { toast } from './dom.js';
 import { clearSession, loadSession, saveSession } from './session.js';
@@ -42,13 +43,17 @@ export function remember() {
     featureFilter: state.featureFilter,
     // the undo history is deliberately left behind; only the documents return
     docs: state.docs.map((d) => ({ ...cloneDoc(d), restoredDirty: isDirty(d) })),
+    // the reads and chromatograms opened against those documents
+    attached: collectAttached(),
   };
   saveSession(payload);
   // A small JSON mirror for recovery when IndexedDB is unavailable or wedged.
   try {
+    // chromatogram curves are too big for this mirror; the reads come back, their traces need the main copy
     const backup = {
       ...payload,
       docs: payload.docs.map((d) => ({ ...d, source: { format: 'backup' } })),
+      attached: collectAttached({ plain: true, withTraces: false }),
     };
     writeAutosave('bublagene.backup', JSON.stringify(backup));
   } catch { /* storage full or unavailable */ }
@@ -75,10 +80,12 @@ export function restoreSession(saved) {
   state.orfMin = saved.orfMin ?? 100;
   state.showComplement = saved.showComplement ?? true;
   state.featureFilter = saved.featureFilter ?? '';
+  restoreAttached(saved.attached);
   state.restorable = null;
   render();
   for (const d of state.docs) loadAlignment(d);
-  toast(`Reopened ${state.docs.length === 1 ? state.docs[0].name : `${state.docs.length} files`}`);
+  const extra = (saved.attached?.traces ?? []).reduce((n, e) => n + (e.traces?.length ?? 0), 0);
+  toast(`Reopened ${state.docs.length === 1 ? state.docs[0].name : `${state.docs.length} files`}${extra ? ` and ${extra} chromatogram${extra === 1 ? '' : 's'}` : ''}`);
 }
 
 export function startFresh() {

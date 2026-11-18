@@ -8,7 +8,8 @@ import { parsePdb } from '../pdb.js';
 import { findBindingSites } from '../primers.js';
 import { projectFromJSON, projectToJSON } from '../project.js';
 import { openDocument, saveDocument } from '../storage.js';
-import { alignments, current, render, state } from './core.js';
+import { collectAttached, restoreAttached } from './attached.js';
+import { current, render, state } from './core.js';
 import { openDoc, openTraceFile } from './documents.js';
 import { traceFormat } from '../traces.js';
 import { toast } from './dom.js';
@@ -97,6 +98,8 @@ export async function save(kind) {
 
 export async function saveProject() {
   if (!state.docs.length) return;
+  // every read and chromatogram opened against a document, whether the reader attached it or a .dna file carried it
+  const kept = collectAttached({ plain: true, onlyAttached: false });
   const json = projectToJSON(state.docs, {
     active: state.active,
     settings: {
@@ -106,11 +109,12 @@ export async function saveProject() {
       showTranslation: state.showTranslation, showSixFrame: state.showSixFrame, showComplement: state.showComplement,
       featureFilter: state.featureFilter,
     },
-    alignments: new Map([...alignments.entries()].filter(([, reads]) => reads).map(([id, reads]) => [id, reads.map((r) => ({ ...r, insertions: r.insertions instanceof Map ? [...r.insertions.entries()] : (r.insertions ?? []) }))])),
+    alignments: kept.alignments,
+    traces: kept.traces,
   });
   try {
-    const result = await saveDocument({ data: json, name: 'project.json', types: [{ description: 'BublaGene project', accept: { 'application/json': ['.json'] } }] });
-    toast(result.method === 'download' ? 'Project downloaded' : 'Project saved');
+    const result = await saveDocument({ data: json, name: `${state.docs[state.active]?.name ?? 'project'}${state.docs.length > 1 ? `+${state.docs.length - 1}` : ''}.bublagene.json`, types: [{ description: 'BublaGene project', accept: { 'application/json': ['.json'] } }] });
+    toast(`${result.method === 'download' ? 'Downloaded' : 'Saved'} ${state.docs.length} tab${state.docs.length === 1 ? '' : 's'}${kept.traces.length ? ' with their chromatograms' : ''}`);
   } catch (e) { toast(`Could not save the project: ${e.message}`, 'error'); }
 }
 
@@ -119,10 +123,16 @@ export async function openProject() {
     const file = await openDocument({ types: [{ description: 'BublaGene project', accept: { 'application/json': ['.json'] } }] });
     if (!file) return;
     const project = projectFromJSON(new TextDecoder().decode(file.data));
-    for (const entry of project.alignments ?? []) {
-      alignments.set(entry.docId, (entry.reads ?? []).map((r) => ({ ...r, insertions: r.insertions instanceof Map ? r.insertions : new Map(r.insertions ?? []) })));
-    }
+    const first = state.docs.length;
+    // opening the same project twice must not give two tabs the same identity
+    const open = new Set(state.docs.map((d) => d.id));
+    const renamed = new Map();
+    for (const d of project.docs) if (open.has(d.id)) { const was = d.id; d.id = newId(); renamed.set(was, d.id); }
+    const remap = (e) => ({ ...e, docId: renamed.get(e.docId) ?? e.docId });
+    restoreAttached({ alignments: project.alignments.map(remap), traces: project.traces.map(remap) });
     for (const d of project.docs) openDoc(d);
+    // reopen on the tab that was in front when it was saved
+    state.active = Math.min(first + project.active, state.docs.length - 1);
     const s = project.settings ?? {};
     state.view = s.view ?? state.view;
     state.panel = s.panel ?? state.panel;
@@ -133,7 +143,7 @@ export async function openProject() {
     state.showSixFrame = s.showSixFrame ?? state.showSixFrame;
     state.showComplement = s.showComplement ?? state.showComplement;
     for (const w of project.warnings) toast(w);
-    toast(`Opened ${project.docs.length} document(s)`);
+    toast(`Opened ${project.docs.length} tab${project.docs.length === 1 ? '' : 's'}`);
     render();
   } catch (e) { toast(`Could not open the project: ${e.message}`, 'error'); }
 }

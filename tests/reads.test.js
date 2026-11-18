@@ -138,3 +138,56 @@ test('a trace written the way real instruments do is read: inline small values, 
   for (const [i, b] of [...bases].entries()) assert.equal(t.samples[b][t.positions[i] + 1] > 0 || t.samples[b][t.positions[i]] > 0, true, `peak for base ${i}`);
   assert.equal(t.tags.includes('Dye#1'), true);
 });
+
+test('a project keeps every tab and the reads and chromatograms opened against them, and brings them back', async () => {
+  const { alignments, traces, state } = await import('../js/ui/core.js');
+  const { collectAttached, restoreAttached } = await import('../js/ui/attached.js');
+  const { projectToJSON, projectFromJSON } = await import('../js/project.js');
+  const tabs = state.docs.length;
+  assert.ok(tabs >= 2, 'the earlier tests left several tabs open');
+  const refDoc = state.docs.find((d) => alignments.get(d.id)?.some((r) => r.attached));
+  const rows = alignments.get(refDoc.id);
+  const trace = traces.get(refDoc.id)[0];
+
+  const kept = collectAttached({ plain: true, onlyAttached: false });
+  const json = projectToJSON(state.docs, { alignments: kept.alignments, traces: kept.traces, active: 1 });
+  const project = projectFromJSON(json);
+  assert.equal(project.docs.length, tabs, 'every tab is in the file');
+  assert.equal(project.active, 1);
+
+  alignments.clear();
+  traces.clear();
+  restoreAttached({ alignments: project.alignments, traces: project.traces });
+  const back = alignments.get(refDoc.id);
+  assert.equal(back.length, rows.length);
+  assert.ok(back[0].insertions instanceof Map, 'insertions come back as a Map');
+  assert.equal(back[0].start, rows[0].start);
+  const t = traces.get(refDoc.id)[0];
+  assert.equal(t.samples.A.length, trace.samples.A.length);
+  assert.deepEqual([...t.samples.G.slice(0, 50)], [...trace.samples.G.slice(0, 50)], 'curves survive the round trip');
+  assert.deepEqual(t.refMap.slice(0, 20), trace.refMap.slice(0, 20));
+  assert.equal(t.reverse, trace.reverse);
+});
+
+test('the session kept between visits restores the reads and chromatograms too, not only the first tab', async () => {
+  const { alignments, traces, state, undo } = await import('../js/ui/core.js');
+  const { collectAttached } = await import('../js/ui/attached.js');
+  const { restoreSession } = await import('../js/ui/persist.js');
+  const { cloneDoc } = await import('../js/model.js');
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+  const refDoc = state.docs.find((d) => alignments.get(d.id)?.some((r) => r.attached));
+  const saved = { active: 0, docs: state.docs.map(cloneDoc), attached: structuredClone(collectAttached()) };
+  const tabs = state.docs.length;
+  const rows = alignments.get(refDoc.id).length;
+
+  state.docs = [];
+  alignments.clear();
+  traces.clear();
+  undo.clear();
+  restoreSession(saved);
+  await tick();
+  assert.equal(state.docs.length, tabs);
+  assert.equal(alignments.get(refDoc.id).length, rows);
+  assert.ok(traces.get(refDoc.id).length >= 1);
+  assert.ok(traces.get(refDoc.id)[0].samples.A instanceof Uint16Array);
+});

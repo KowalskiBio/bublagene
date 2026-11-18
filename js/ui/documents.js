@@ -13,18 +13,24 @@ import { alignments, current, isDirty, render, state, traces, undo } from './cor
 import { fmt, toast } from './dom.js';
 import { showSequenceDialog } from './seqdialog.js';
 
+// The reads and chromatograms a .dna file carries inside it. Whatever the reader
+// attached to the document (see attachRead) stays alongside them.
+const loaded = new Set();
 export async function loadAlignment(doc) {
-  if (alignments.has(doc.id)) return;
-  alignments.set(doc.id, null);
+  if (loaded.has(doc.id)) return;
+  loaded.add(doc.id);
   try {
     const reads = await readAlignments(doc);
-    if (reads) { alignments.set(doc.id, reads); render(); }
+    if (reads) {
+      alignments.set(doc.id, [...reads, ...(alignments.get(doc.id) ?? []).filter((r) => r.attached)]);
+      render();
+    }
   } catch (e) {
     toast(`Could not read the alignment in ${doc.name}: ${e.message}`, 'error');
   }
   try {
     const found = await readTraces(doc);
-    if (found.length) { traces.set(doc.id, found); render(); }
+    if (found.length) { traces.set(doc.id, [...found, ...(traces.get(doc.id) ?? []).filter((t) => t.attached)]); render(); }
   } catch (e) {
     toast(`Could not read the traces in ${doc.name}: ${e.message}`, 'error');
   }
@@ -38,10 +44,11 @@ export function attachRead(ref, read, trace = null) {
   if (trace) {
     trace.reverse = read.reverse;
     trace.refMap = map;
+    trace.attached = true;
     row.traceId = trace.id;
     traces.set(ref.id, [...(traces.get(ref.id) ?? []).filter((t) => t.id !== trace.id), trace]);
   }
-  const reads = [...(alignments.get(ref.id) ?? []), { ...row, pos: row.start }]
+  const reads = [...(alignments.get(ref.id) ?? []), { ...row, pos: row.start, attached: true }]
     .sort((a, b) => a.start - b.start || a.label.localeCompare(b.label));
   alignments.set(ref.id, reads);
   state.showReads = true;
@@ -73,6 +80,7 @@ export async function openTraceFile(buffer, fileName) {
   }
   const doc = traceToDocument(trace);
   openDoc(doc);
+  trace.attached = true;
   traces.set(doc.id, [trace]);
   state.view = 'trace';
   state.trace = 0;
