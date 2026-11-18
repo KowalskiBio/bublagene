@@ -189,3 +189,17 @@ test('featuresInRegion handles wrap-around', () => {
   assert.deepEqual([out[0].segments[0].start, out[0].segments[0].end], [8, 18]);
   assert.equal(rangeLength({ start: 95, end: 5 }, 100), 10);
 });
+
+test('the reverse strand over a window is the reverse complement of the matching top-strand slice', () => {
+  // the sequence view relies on this to translate reverse frames without reverse-complementing the whole sequence per line
+  let s = 11;
+  const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const seq = Array.from({ length: 500 }, () => 'ACGT'[Math.floor(rnd() * 4)]).join('');
+  const L = seq.length;
+  const rc = revcomp(seq);
+  for (let k = 0; k < 200; k++) {
+    const a = Math.floor(rnd() * L);
+    const b = Math.min(L, a + Math.floor(rnd() * 120));
+    assert.equal(revcomp(seq.slice(L - b, L - a)), rc.slice(a, b));
+  }
+});

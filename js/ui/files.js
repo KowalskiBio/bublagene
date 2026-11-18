@@ -42,11 +42,13 @@ export async function openFiles(files) {
         for (const d of project.docs) openDoc(d);
         if (project.warnings.length) toast(project.warnings[0]);
       } else {
-        const text = await readFileText(file);
+        const text = (await readFileText(file)).replace(/^\uFEFF/, '');
         const docs = /^LOCUS/m.test(text) ? readGenBank(text, file.name)
           : text.trimStart().startsWith('>') ? readFasta(text, file.name)
             : readFasta(`>${file.name}\n${text}`, file.name);
         for (const d of docs) openDoc(d);
+        const skipped = docs.flatMap((d) => d.source?.warnings ?? []);
+        if (skipped.length) toast(`${file.name}: ${skipped.length} feature${skipped.length === 1 ? '' : 's'} skipped, location not understood (${skipped[0].slice(0, 50)})`, 'error');
       }
     } catch (e) {
       toast(`${file.name}: ${e.message}`, 'error');

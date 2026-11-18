@@ -235,7 +235,7 @@ function detectPanel(el, { doc, state, api, others = [] }) {
       h('input', { type: 'checkbox', checked: state.detectUseDocs, onchange: (e) => api.setDetectOptions({ detectUseDocs: e.target.checked }) }),
       `Also use features annotated in the ${others.length} other open file${others.length === 1 ? '' : 's'}`));
   }
-  el.append(h('button', { class: 'btn primary', disabled: !doc.seq.length, onclick: () => api.runDetect() }, 'Detect features'));
+  el.append(h('button', { class: 'btn primary', disabled: !doc.seq.length || state.detectBusy, onclick: () => api.runDetect() }, state.detectBusy ? 'Detecting…' : 'Detect features'));
 
   if (run) {
     el.append(h('h3', {}, `${run.hits.length} new element${run.hits.length === 1 ? '' : 's'} found`));

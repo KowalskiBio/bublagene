@@ -216,11 +216,13 @@ export function sequenceView(doc, opts = {}) {
         }, `+${f} ${[...protein].join('  ')}`));
         y += 13;
       }
-      const rc = revcomp(doc.seq);
       for (let f = 1; f <= 3; f++) {
         const rFrom = L - to;
         const start = Math.max(0, rFrom - mod(rFrom - (f - 1), 3));
-        const protein = translate(rc.slice(start, Math.min(L, rFrom + (to - from) + 3)));
+        const stop = Math.min(L, rFrom + (to - from) + 3);
+        // the reverse strand over [start, stop) is the reverse complement of the top strand over [L - stop, L - start);
+        // doing the whole sequence here, once per line, was what made six-frame view slow on long sequences
+        const protein = translate(revcomp(doc.seq.slice(L - stop, L - start)));
         if (!protein) continue;
         line.append(h('div', {
           class: 'aa', style: { left: `${NUM_W}px`, top: `${y}px`, opacity: .7 },

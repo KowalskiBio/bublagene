@@ -73,7 +73,7 @@ function load(path) {
   const name = basename(path);
   const ext = extname(path).toLowerCase();
   if (ext === '.dna') return readDna(readFileSync(path), name);
-  const text = readFileSync(path, 'utf8');
+  const text = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
   if (['.gb', '.gbk', '.genbank', '.gbff'].includes(ext)) return readGenBank(text, name)[0];
   if (['.fasta', '.fa', '.fna', '.fas'].includes(ext)) return readFasta(text, name)[0];
   if (text.startsWith('>')) return readFasta(text, name)[0];

@@ -21,14 +21,32 @@ export function designApi(api) {
     setCloning(patch) { state.cloning = { ...state.cloning, ...patch }; render(); },
     userLibrary() { return loadUserLibrary(); },
     setDetectOptions(patch) { Object.assign(state, patch); render(); },
-    runDetect() {
+    async runDetect() {
       const doc = current();
-      if (!doc) return;
+      if (!doc || state.detectBusy) return;
       const others = state.docs.filter((d) => d.id !== doc.id);
       const library = [...BUILTIN_LIBRARY, ...loadUserLibrary(), ...(state.detectUseDocs ? libraryFromDocs(others) : [])];
-      const hits = detectFeatures(doc, library, { maxMismatchRate: state.detectRate / 100 })
-        .map((h, i) => ({ ...h, key: i, checked: true }));
-      state.detect = { docId: doc.id, hits, libraryCount: library.length };
+      const { seq } = doc;
+      state.detectBusy = true;
+      render();
+      let hits = null;
+      let failure = null;
+      try {
+        // a long sequence takes a while; do it off the page's thread
+        const { result } = await offload(
+          ({ doc: d, library: lib, options }) => detectFeatures(d, lib, options),
+          { kind: 'detect', doc: { seq: doc.seq, circular: doc.circular, features: doc.features }, library, options: { maxMismatchRate: state.detectRate / 100 } },
+          { workerUrl: new URL('../../workers/compute-worker.js', import.meta.url), timeoutMs: 120000 },
+        );
+        if (result?.__error) throw new Error(result.__error);
+        hits = result.map((h, i) => ({ ...h, key: i, checked: true }));
+      } catch (e) { failure = e.message; }
+      state.detectBusy = false;
+      // the reader may have edited or closed the file while this ran; its answer no longer fits
+      if (current()?.id === doc.id && current().seq === seq) {
+        if (failure) toast(`Could not detect: ${failure}`, 'error');
+        else state.detect = { docId: doc.id, hits, libraryCount: library.length };
+      }
       render();
     },
     toggleDetected(key) {
@@ -73,7 +91,7 @@ export function designApi(api) {
         const { result } = await offload(
           ({ a, b, options: opts }) => alignPair(a, b, opts),
           { kind: 'align', a: doc.seq, b: target.seq, options },
-          { workerUrl: new URL('../workers/compute-worker.js', import.meta.url) },
+          { workerUrl: new URL('../../workers/compute-worker.js', import.meta.url) },
         );
         if (result?.__error) throw new Error(result.__error);
         state.alignResult = { docId: doc.id, targetId: target.id, result };
@@ -150,7 +168,7 @@ export function designApi(api) {
         const { result, worker } = await offload(
           ({ sequence, limit }) => fold(sequence, { maxLength: limit }),
           { sequence: seq, limit: maxLength },
-          { workerUrl: new URL('../workers/compute-worker.js', import.meta.url) },
+          { workerUrl: new URL('../../workers/compute-worker.js', import.meta.url) },
         );
         if (result?.__error) throw new Error(result.__error);
         state.fold = { docId: doc.id, result, worker, maxLength, busy: false };
