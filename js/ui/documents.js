@@ -10,7 +10,8 @@ import { addHistory, newId, swapFeature, cloneDoc, featureSpan, replaceRange } f
 import { cleanSequence } from '../seq.js';
 import { History } from '../undo.js';
 import { alignments, current, isDirty, render, state, traces, undo } from './core.js';
-import { toast } from './dom.js';
+import { fmt, toast } from './dom.js';
+import { showSequenceDialog } from './seqdialog.js';
 
 export async function loadAlignment(doc) {
   if (alignments.has(doc.id)) return;
@@ -144,18 +145,24 @@ export function edit(label, mutate, { redraw = true } = {}) {
   if (redraw) render();
 }
 
-// Replace the selection with typed text. Cancelling the prompt must leave the
-// sequence alone; an empty answer is treated the same way (Delete is for that).
+// Replace the selection with pasted text. Cancelling the dialog leaves the
+// sequence alone; an empty paste cannot be applied (Delete is for that).
 export function replaceSelection() {
   const sel = state.selection;
-  if (!sel) return;
-  const answer = window.prompt('Replace the selection with:');
-  if (answer === null) return;
-  const seq = cleanSequence(answer);
-  if (!seq) return;
-  edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); }, { redraw: false });
-  state.selection = { start: sel.start, end: sel.start + seq.length };
-  render();
+  const doc = current();
+  if (!sel || !doc) return;
+  const picked = doc.seq.slice(sel.start, sel.end);
+  showSequenceDialog({
+    title: 'Replace the selected bases',
+    intro: `${fmt(picked.length)} bp selected (${fmt(sel.start + 1)}–${fmt(sel.end)}).`,
+    current: { label: 'Selected', seq: picked, offset: sel.start },
+    confirmLabel: 'Replace',
+    onConfirm: (seq) => {
+      edit('Replace selection', (d) => { replaceRange(d, sel.start, sel.end, seq); }, { redraw: false });
+      state.selection = { start: sel.start, end: sel.start + seq.length };
+      render();
+    },
+  });
 }
 
 // Swap a feature's bases for ones the reader pasted, keeping its annotation.

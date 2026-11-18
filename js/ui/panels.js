@@ -13,6 +13,7 @@ import { callVariants, variantsToFeatures, formatVariant } from '../variants.js'
 import { structureToSvg } from '../fold.js';
 import { describeSegments } from '../formats/dna.js';
 import { cloningPanel } from './cloningpanel.js';
+import { showSequenceDialog } from './seqdialog.js';
 import { historyPanel, plotPanel, proteinPanel, contigsPanel, searchPanel, libraryPanel, msaSection } from './panels2.js';
 import { aminoAcidChange } from '../mutagenesis.js';
 import { orfsFor } from './overlays.js';
@@ -779,10 +780,12 @@ function crisprPanel(el, { doc, state, api }) {
     el.append(row);
     el.append(h('div', { class: 'group', style: { margin: '0 0 6px 20px' } },
       h('button', { class: 'btn', onclick: () => api.simulateNhej(g) }, 'NHEJ'),
-      h('button', { class: 'btn', onclick: () => {
-        const donor = window.prompt('HDR donor sequence (5′→3′):');
-        if (donor) api.simulateHdr(g, cleanSequence(donor));
-      } }, 'HDR…'),
+      h('button', { class: 'btn', onclick: () => showSequenceDialog({
+        title: 'HDR donor',
+        intro: `Repair template for the cut at ${fmt(g.start + 1)}, written 5′→3′ on the top strand.`,
+        confirmLabel: 'Simulate',
+        onConfirm: (donor) => api.simulateHdr(g, donor),
+      }) }, 'HDR…'),
       h('button', { class: 'btn', onclick: () => api.crisprPrimers(g) }, 'Primers'),
       g.offTargets ? h('span', { class: 'sub' }, `${g.offTargets.length} near-match(es)`) : null));
   }

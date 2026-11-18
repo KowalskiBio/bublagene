@@ -76,3 +76,34 @@ test('a pasted sequence is read from FASTA, GenBank-style numbering and RNA', ()
   assert.deepEqual(readPastedSequence('ATGEL'), { seq: 'ATG', ignored: 2 });
   assert.deepEqual(readPastedSequence('ATGRYN'), { seq: 'ATGRYN', ignored: 0 });
 });
+
+test('the sequence dialog shows the current bases, enables Apply once something is pasted, and hands back clean bases', async () => {
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
+  const { window } = dom;
+  Object.assign(globalThis, {
+    window, document: window.document, HTMLElement: window.HTMLElement, Node: window.Node,
+    addEventListener: window.addEventListener.bind(window), removeEventListener: window.removeEventListener.bind(window),
+  });
+  const { showSequenceDialog } = await import('../js/ui/seqdialog.js');
+  let got = null;
+  showSequenceDialog({
+    title: 'Swap “X”', current: { label: 'Current', seq: 'ACGT'.repeat(40) }, confirmLabel: 'Swap',
+    notes: ({ seq }) => (seq.length % 3 ? ['frame shifts'] : []),
+    onConfirm: (s) => { got = s; },
+  });
+  const q = (sel) => window.document.querySelector(sel);
+  assert.ok(q('.seqmodal'));
+  assert.match(q('.seqpreview').textContent, /1ACGTACGTAC GTACGTACGT/, 'the current sequence is shown in numbered blocks');
+  assert.equal(q('.btn.primary').disabled, true, 'nothing to apply yet');
+  const ta = q('.seqtext');
+  ta.value = '>x\nauggc c\n12 gE';
+  ta.dispatchEvent(new window.Event('input', { bubbles: true }));
+  assert.equal(q('.btn.primary').disabled, false);
+  assert.match(q('.seqinfo').textContent, /1 letter that are not bases|1 letters? that are not bases/);
+  assert.match(q('.seqinfo').textContent, /frame shifts/);
+  assert.match(q('.seqpanehead .sub').textContent, /bp/);
+  q('.btn.primary').click();
+  assert.equal(got, 'ATGGCCG');
+  assert.equal(q('.seqmodal'), null, 'the dialog closes');
+});

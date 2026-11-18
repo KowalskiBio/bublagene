@@ -85,6 +85,9 @@ Mutate, CRISPR), **Enzymes** (Enzymes, Digest), **Cloning**, **Analyse**
   the feature's own direction). The feature keeps its name, colour and
   qualifiers and takes the new length, everything around it shifts to match, and
   annotations that sat wholly inside it are removed. One undo reverses it.
+  The dialog is the same one **Replace selected bases…** and the CRISPR **HDR…**
+  donor use: the current sequence on one side, a scrollable paste box with a
+  formatted preview on the other.
 - Fragments copy and paste across documents. Undo and redo coalesce bursts of
   typing, and the **History** panel lists every step so you can jump to any of
   them. Autosave keeps an IndexedDB session plus a small recovery mirror.

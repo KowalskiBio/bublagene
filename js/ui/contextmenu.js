@@ -10,7 +10,7 @@ import { deleteSelection, edit, replaceSelection, swapFeatureSequence } from './
 import { fmt } from './dom.js';
 import { showMenu } from './menu.js';
 import { isOrf, isPrimer } from './overlays.js';
-import { showSwapDialog } from './swapdialog.js';
+import { swapDialog } from './swapdialog.js';
 import { overlaysFor } from './viewdata.js';
 
 function featureFromEvent(ev) {
@@ -48,7 +48,7 @@ export function openContextMenu(ev) {
     items.push({
       label: 'Swap sequence…',
       disabled: feature.segments.length !== 1,
-      onClick: () => showSwapDialog(doc, feature, (seq) => swapFeatureSequence(feature, seq)),
+      onClick: () => swapDialog(doc, feature, (seq) => swapFeatureSequence(feature, seq)),
     });
     items.push({ label: 'Delete feature', danger: true, onClick: () => edit(`Delete ${feature.name}`, (d) => { d.features = d.features.filter((x) => x.id !== feature.id); }) });
     items.push('-');
