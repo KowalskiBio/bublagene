@@ -5,12 +5,13 @@ import { traceBaseToReference } from '../traces.js';
 import { api } from './api/index.js';
 import { emptyCard, welcome } from './cards.js';
 import { renderPanels, renderStatus } from './chrome.js';
-import { current, el, render, state, traces } from './core.js';
+import { alignments, current, el, render, state, traces } from './core.js';
 import { syncHighlight } from './documents.js';
 import { clear, h, toast } from './dom.js';
 import { circularMap, linearMap } from './map.js';
 import { isOverlay, isPrimer } from './overlays.js';
 import { sequenceView } from './seqview.js';
+import { alignmentView } from './alignview.js';
 import { traceView } from './traceview.js';
 import { overlaysFor, readsFor, shownSites } from './viewdata.js';
 
@@ -25,6 +26,23 @@ export function renderView(doc) {
   activeTraceView = null;
   if (!doc) { view.append(welcome()); return; }
   if (!doc.seq.length && state.view !== 'trace') { view.append(emptyCard(doc)); return; }
+  if (state.view === 'align') {
+    const rows = alignments.get(doc.id) ?? [];
+    const av = alignmentView(doc, rows, traces.get(doc.id) ?? [], {
+      selected: Math.min(state.alignRow, rows.length - 1), cw: state.alignCw, scrollTo: state.alignScroll,
+      onScroll: (x) => { state.alignScroll = x; },
+      onSelect: (i) => { state.alignRow = i; state.alignScroll = null; render(); },
+      onZoom: (cw) => { state.alignScroll = (state.alignScroll ?? 0) * (cw / state.alignCw); state.alignCw = cw; render(); },
+      onPickColumn: (col) => {
+        state.selection = { start: col, end: col + 1 };
+        renderStatus(current());
+        renderPanels(current());
+      },
+    });
+    view.append(av);
+    addEventListener('resize', () => av.refresh?.(), { once: true });
+    return;
+  }
   const sites = shownSites(doc);
   const opts = {
     selection: state.selection, sites, highlight: state.highlight,

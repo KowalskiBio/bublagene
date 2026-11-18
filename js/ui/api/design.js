@@ -10,8 +10,9 @@ import { newId } from '../../model.js';
 import { subseq } from '../../seq.js';
 import { callVariants, variantsToFeatures } from '../../variants.js';
 import { selectedSeq } from '../clipboard.js';
-import { current, render, state } from '../core.js';
-import { edit, openDoc } from '../documents.js';
+import { placeRead, rowFromPairwise } from '../../readalign.js';
+import { current, render, state, traces } from '../core.js';
+import { attachRead, edit, openDoc } from '../documents.js';
 import { h, toast } from '../dom.js';
 import { loadUserLibrary, storeUserLibrary } from '../local-libraries.js';
 
@@ -95,6 +96,11 @@ export function designApi(api) {
         );
         if (result?.__error) throw new Error(result.__error);
         state.alignResult = { docId: doc.id, targetId: target.id, result };
+        // show it in the Alignment view of the reference: its map, this sequence aligned to it, and the chromatogram if there is one
+        const own = (traces.get(doc.id) ?? []).find((t) => t.bases?.length === doc.seq.length) ?? null;
+        const placed = own && doc.seq.length <= 3000 ? placeRead(target.seq, own, { label: doc.name }) : null;
+        const row = placed ?? rowFromPairwise(result, doc.seq.length, doc.name);
+        attachRead(target, row, own ? { ...own } : null);
       } catch (e) {
         state.alignResult = { docId: doc.id, targetId: target.id, error: e.message };
       }

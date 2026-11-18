@@ -185,6 +185,12 @@ a fragment library can be batch-assembled from the command line.
   and its chromatogram is behind the Chromatogram view. A read that does not
   match the reference opens as its own document. Files are recognised by their
   first bytes, so the extension does not matter.
+- The **Alignment** tab shows the reference as a feature map, then each aligned
+  sequence column by column under the matching reference bases (mismatches
+  filled in, gaps and insertions marked), then the chromatogram of the selected
+  one stretched onto the same columns, so each peak sits under the base it
+  called. Align a document to another from the Alignment panel and it opens
+  there too; when that document is a trace, the chromatogram comes with it.
 - Mott and Phred trimming, trim features and synchronised trace-to-reference
   navigation.
 - Trace bases map back to the reference through an alignment; “Show in sequence”
@@ -372,6 +378,7 @@ js/
   tracks.js           GC content and skew along a sequence
   traces.js           trace trimming, slicing and reference mapping
   readalign.js        place a Sanger read on a reference (k-mer seed, local alignment)
+  ui/alignview.js     the Alignment tab: reference map, aligned rows, chromatogram
   fragment.js         fragment and feature copy/paste, feature reordering
   cache.js            digest-keyed caches and stale-alignment invalidation
   undo.js             coalescing undo/redo with a jumpable timeline

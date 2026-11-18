@@ -252,6 +252,16 @@ svg text { font-family: var(--font-sans); }
 .tracescroll { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; position: relative; min-height: 220px; }
 .tracespacer { height: 1px; }
 .tracecanvas { position: absolute; top: 0; }
+.alignwrap { display: flex; flex-direction: column; min-height: 320px; }
+.alignbar {
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex: none;
+  padding: 8px max(16px, env(safe-area-inset-left, 0px));
+  border-bottom: 1px solid var(--line);
+}
+.alignmapsvg { display: block; width: 100%; cursor: pointer; border-bottom: 1px solid var(--line); }
+.alignscroll { overflow-x: auto; overflow-y: hidden; position: relative; flex: none; }
+.alignspacer { height: 1px; }
+.aligncanvas { position: absolute; top: 0; }
 .tracelegend { display: flex; gap: 12px; padding: 6px 16px; font-size: 11.5px; color: var(--muted); flex: none; }
 .tracelegend b { font-weight: 600; }
 
@@ -370,6 +380,7 @@ ul.tree.root { border-left: none; padding-left: 0; margin-left: 0; }
         <button data-view="seq" aria-pressed="false">Sequence</button>
         <button data-view="split" aria-pressed="false" title="Map above, sequence below">Map + sequence</button>
         <button data-view="trace" aria-pressed="false" hidden>Chromatogram</button>
+        <button data-view="align" aria-pressed="false" hidden title="Reference, aligned sequences and chromatogram, column by column">Alignment</button>
       </div>
       <div class="group" id="viewOpts"></div>
       <div class="spacer"></div>

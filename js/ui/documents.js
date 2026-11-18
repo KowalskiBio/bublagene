@@ -29,6 +29,28 @@ export async function loadAlignment(doc) {
   }
 }
 
+// Add an aligned sequence to a reference document, with its chromatogram when
+// it has one, and show it in the Alignment view. `read` carries `map` (the
+// reference position of each base of the sequence).
+export function attachRead(ref, read, trace = null) {
+  const { map, ...row } = read;
+  if (trace) {
+    trace.reverse = read.reverse;
+    trace.refMap = map;
+    row.traceId = trace.id;
+    traces.set(ref.id, [...(traces.get(ref.id) ?? []).filter((t) => t.id !== trace.id), trace]);
+  }
+  const reads = [...(alignments.get(ref.id) ?? []), { ...row, pos: row.start }]
+    .sort((a, b) => a.start - b.start || a.label.localeCompare(b.label));
+  alignments.set(ref.id, reads);
+  state.showReads = true;
+  state.alignRow = reads.findIndex((r) => r.label === row.label && r.start === row.start);
+  state.alignScroll = null;
+  state.view = 'align';
+  state.active = state.docs.indexOf(ref);
+  render();
+}
+
 // Open a chromatogram file. With a reference open (a .gb or .dna the user
 // opened first) the read is aligned to it and added as a row under the
 // sequence, with its chromatogram behind the Trace view. Otherwise, or if the
@@ -40,14 +62,7 @@ export async function openTraceFile(buffer, fileName) {
   if (ref && ref.seq.length && ref.source?.format !== 'trace') {
     const read = placeRead(ref.seq, trace, { label: trace.name });
     if (read) {
-      trace.reverse = read.reverse;
-      trace.refMap = read.map;
-      const { map, ...row } = read;
-      const reads = [...(alignments.get(ref.id) ?? []), { ...row, pos: row.start }].sort((a, b) => a.start - b.start || a.label.localeCompare(b.label));
-      alignments.set(ref.id, reads);
-      traces.set(ref.id, [...(traces.get(ref.id) ?? []), trace]);
-      state.showReads = true;
-      render();
+      attachRead(ref, read, trace);
       toast(`${trace.name}: aligned to ${ref.name} at ${read.start + 1}–${read.end}, ${read.identity.toFixed(1)}% identity${read.reverse ? ', reverse strand' : ''}`);
       return;
     }

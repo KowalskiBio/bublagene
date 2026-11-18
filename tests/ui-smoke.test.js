@@ -24,6 +24,7 @@ function markup() {
 test('the app renders maps, panels, alignment, CRISPR and structure in jsdom', async () => {
   const dom = new JSDOM(markup(), { url: 'http://localhost/', pretendToBeVisual: true });
   const { window } = dom;
+  window.HTMLCanvasElement.prototype.getContext = () => null; // jsdom draws nothing; the views skip drawing without a context
   globalThis.window = window;
   globalThis.document = window.document;
   Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true });

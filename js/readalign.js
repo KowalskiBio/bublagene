@@ -46,6 +46,32 @@ function seed(index, read) {
 }
 
 /**
+ * Turn an aligned pair of strings into a row the sequence and alignment views
+ * draw: one character per reference position the read covers ('-' where the
+ * read lacks a base), insertions keyed by the position they sit before, and
+ * `map`, the reference position of each read base (null outside the alignment).
+ * `n` is the length of the read, in the orientation that was aligned.
+ */
+export function rowFromAlignment({ alignedRef, alignedRead, startRef, startRead }, n) {
+  const chars = [];
+  const insertions = new Map();
+  const map = new Array(n).fill(null);
+  let q = startRead;
+  for (let i = 0; i < alignedRef.length; i++) {
+    const a = alignedRef[i];
+    const b = alignedRead[i];
+    if (a !== '-' && b !== '-') { map[q++] = startRef + chars.length; chars.push(b); }
+    else if (a !== '-') chars.push('-');
+    else {
+      const at = startRef + chars.length;
+      insertions.set(at, (insertions.get(at) ?? '') + b);
+      map[q++] = at - 1 >= startRef ? at - 1 : null;
+    }
+  }
+  return { start: startRef, chars, insertions, map, end: startRef + chars.length };
+}
+
+/**
  * Align a trace to a reference.
  * Returns null when it does not match. Otherwise a read in the shape the
  * sequence view draws (start, chars, insertions, label, reverse), plus `map`
@@ -66,28 +92,18 @@ export function placeRead(reference, trace, { label = trace.name || 'read', minI
   const from = Math.max(0, hit.diagonal - SLACK);
   const to = Math.min(ref.length, hit.diagonal + oriented.length + SLACK + BIN);
   if (to - from < K) return null;
+  if ((to - from) * oriented.length > 8_000_000) return null; // too large to align in full
   const aln = alignLocal(ref.slice(from, to), oriented);
   const aligned = aln.matches + aln.mismatches;
   if (aligned < minAligned || aln.identityAligned < minIdentity) return null;
 
-  const start = from + aln.startA;
-  const chars = [];
-  const insertions = new Map();
   const n = oriented.length;
-  const orientedMap = new Array(n).fill(null); // oriented read index -> reference position
-  let q = aln.startB;
-  for (let i = 0; i < aln.alignedA.length; i++) {
-    const a = aln.alignedA[i];
-    const b = aln.alignedB[i];
-    if (a !== '-' && b !== '-') { orientedMap[q++] = start + chars.length; chars.push(b); }
-    else if (a !== '-') chars.push('-');
-    else {
-      const at = start + chars.length;
-      insertions.set(at, (insertions.get(at) ?? '') + b);
-      orientedMap[q++] = at - 1 >= start ? at - 1 : null;
-    }
-  }
-  const map = reverse ? orientedMap.reverse() : orientedMap;
+  const row = rowFromAlignment(
+    { alignedRef: aln.alignedA, alignedRead: aln.alignedB, startRef: from + aln.startA, startRead: aln.startB },
+    n,
+  );
+  const { start, chars, insertions } = row;
+  const map = reverse ? row.map.reverse() : row.map;
   return {
     label, reverse, start, chars, insertions, map,
     end: start + chars.length,
@@ -96,4 +112,16 @@ export function placeRead(reference, trace, { label = trace.name || 'read', minI
     readStart: reverse ? n - aln.endB : aln.startB,
     readEnd: reverse ? n - aln.startB : aln.endB,
   };
+}
+
+/**
+ * The row for a pairwise alignment where the first sequence is the query and
+ * the second is the reference (the Alignment panel's convention).
+ */
+export function rowFromPairwise(result, queryLength, label) {
+  const row = rowFromAlignment(
+    { alignedRef: result.alignedB, alignedRead: result.alignedA, startRef: result.startB, startRead: result.startA },
+    queryLength,
+  );
+  return { label, reverse: false, ...row, identity: result.identityAligned, matches: result.matches, mismatches: result.mismatches };
 }

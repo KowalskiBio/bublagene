@@ -93,3 +93,34 @@ test('opening an .ab1 with a reference open adds a read; without one it opens it
   assert.equal(state.docs.length, 2);
   assert.equal(state.view, 'trace');
 });
+
+test('aligning a document that is a trace to a reference opens the Alignment view with its chromatogram', async () => {
+  const { openFiles } = await import('../js/ui/files.js');
+  const { alignments, traces, state } = await import('../js/ui/core.js');
+  const { api } = await import('../js/ui/api/index.js');
+  const { newDocument } = await import('../js/model.js');
+  const { openDoc } = await import('../js/ui/documents.js');
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+
+  // a second reference, then a read that was opened on its own (no reference was active when it came in)
+  const ref = newDocument({ name: 'ref2', seq: REF, circular: false });
+  const piece = REF.slice(2000, 2400);
+  openDoc(newDocument({ name: 'blank', seq: '', circular: false }));
+  await openFiles([{ name: 'solo.ab1', data: makeAB1({ bases: revcomp(piece), qualities: Array(400).fill(40), name: 'solo' }) }]);
+  await tick();
+  openDoc(ref);
+  const solo = state.docs.find((d) => d.name === 'solo');
+  assert.ok(solo, 'the read opened as its own document');
+  state.active = state.docs.indexOf(solo);
+  state.alignTarget = ref.id;
+  await api.runAlignment();
+  await tick();
+
+  assert.equal(state.docs[state.active].id, ref.id, 'the reference is now the active tab');
+  assert.equal(state.view, 'align');
+  const rows = alignments.get(ref.id);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reverse, true);
+  assert.equal(rows[0].start, 2000);
+  assert.equal(traces.get(ref.id)[0].refMap[0], 2399);
+});

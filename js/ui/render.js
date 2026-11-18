@@ -2,7 +2,7 @@
 // The one function that redraws the page. Importing this module registers it.
 
 import { renderPanels, renderStatus, renderTabs, renderViewBar } from './chrome.js';
-import { current, el, setRenderer, state, traces, undo } from './core.js';
+import { alignments, current, el, setRenderer, state, traces, undo } from './core.js';
 import { rememberSoon } from './persist.js';
 import { renderView } from './viewpane.js';
 
@@ -36,11 +36,14 @@ function renderApp() {
   const snap = focusSnapshot();
   renderTabs();
   const hasTraces = !!traces.get(doc?.id)?.length;
+  const hasAligned = !!alignments.get(doc?.id)?.length;
   for (const b of el('viewSeg').querySelectorAll('button')) {
     b.setAttribute('aria-pressed', String(b.dataset.view === state.view));
     if (b.dataset.view === 'trace') b.hidden = !hasTraces;
+    if (b.dataset.view === 'align') b.hidden = !hasAligned;
   }
   if (state.view === 'trace' && !hasTraces) state.view = 'map';
+  if (state.view === 'align' && !hasAligned) state.view = 'map';
   renderViewBar(doc);
   renderView(doc);
   renderStatus(doc);

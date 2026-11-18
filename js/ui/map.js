@@ -85,7 +85,10 @@ export function circularMap(doc, opts = {}) {
   const { lanes, depth } = assignLanes(features, L);
   const R = 150;            // the backbone, with features stacked outward from it
   const outerR = R + depth * LANE;
-  const root = s('svg', { viewBox: `0 0 ${W} ${W}`, width: W, height: W, role: 'img', 'aria-label': `Map of ${doc.name}` });
+  // Everything is drawn in a group that is shifted right by whatever the left-hand
+  // labels need, and the svg is made as wide as the labels require.
+  const svg = s('svg', { role: 'img', 'aria-label': `Map of ${doc.name}` });
+  const root = s('g', {});
 
   // backbone
   root.append(s('circle', { cx, cy, r: R, fill: 'none', stroke: 'var(--line)', 'stroke-width': 3 }));
@@ -168,21 +171,31 @@ export function circularMap(doc, opts = {}) {
   }
   spread(left, 15, 14, W - 14);
   spread(right, 15, 14, W - 14);
+  // The text sits in a column just outside the ring and runs away from it, so a
+  // leader line always ends at the near edge of its label and never crosses it.
+  const MAX_LABEL = 28;
+  const shown = (lab) => (lab.text.length > MAX_LABEL ? `${lab.text.slice(0, MAX_LABEL - 1)}…` : lab.text);
+  const textWidth = (lab) => shown(lab).length * (lab.kind === 'site' ? 6.2 : 6.9);
+  const colL = cx - anchorR - 36;
+  const colR = cx + anchorR + 36;
+  const padL = Math.max(0, Math.ceil(Math.max(0, ...left.map(textWidth)) - colL + 14));
+  const padR = Math.max(0, Math.ceil(colR + Math.max(0, ...right.map(textWidth)) + 14 - W));
   for (const side of [left, right]) {
     const isLeft = side === left;
     for (const lab of side) {
-      const x = isLeft ? 14 : W - 14;
-      const elbow = isLeft ? x + 30 : x - 30;
+      const x = isLeft ? colL : colR;
+      const elbow = isLeft ? x + 24 : x - 24;
       root.append(s('polyline', {
-        points: `${lab.footX},${lab.footY} ${lab.anchorX},${lab.anchorY} ${elbow},${lab.y} ${isLeft ? x + 3 : x - 3},${lab.y}`,
+        points: `${lab.footX},${lab.footY} ${lab.anchorX},${lab.anchorY} ${elbow},${lab.y} ${isLeft ? x + 5 : x - 5},${lab.y}`,
         fill: 'none', stroke: 'var(--line)', 'stroke-width': 1,
       }));
       const t = s('text', {
         x, y: lab.y, 'font-size': 11.5, fill: lab.kind === 'site' ? 'var(--muted)' : 'var(--ink)',
-        'text-anchor': isLeft ? 'start' : 'end', 'dominant-baseline': 'middle',
+        'text-anchor': isLeft ? 'end' : 'start', 'dominant-baseline': 'middle',
         style: 'cursor:pointer',
         'font-weight': lab.kind === 'site' ? 400 : 600,
-      }, lab.text);
+      }, shown(lab));
+      if (shown(lab) !== lab.text) t.append(s('title', {}, lab.text));
       if (lab.kind === 'site' && onPickSite) t.addEventListener('click', () => onPickSite(lab.site));
       else if (onPick) t.addEventListener('click', () => onPick(features.find((f) => f.id === lab.id)));
       root.append(t);
@@ -192,7 +205,12 @@ export function circularMap(doc, opts = {}) {
   // centre caption
   root.append(s('text', { x: cx, y: cy - 7, 'text-anchor': 'middle', 'font-size': 16, 'font-weight': 600, fill: 'var(--ink)' }, doc.name));
   root.append(s('text', { x: cx, y: cy + 14, 'text-anchor': 'middle', 'font-size': 11.5, fill: 'var(--muted)' }, `${fmt(L)} bp · ${doc.circular ? 'circular' : 'linear'}`));
-  return root;
+  root.setAttribute('transform', `translate(${padL} 0)`);
+  svg.setAttribute('viewBox', `0 0 ${W + padL + padR} ${W}`);
+  svg.setAttribute('width', String(W + padL + padR));
+  svg.setAttribute('height', String(W));
+  svg.append(root);
+  return svg;
 }
 
 export function linearMap(doc, opts = {}) {

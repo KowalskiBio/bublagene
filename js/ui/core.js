@@ -27,10 +27,13 @@ export const state = {
   featureFilter: '',
   showReads: true,
   trace: 0,
+  alignRow: 0,      // which aligned sequence the Alignment view shows the chromatogram of
+  alignCw: 10,      // pixels per column in the Alignment view
+  alignScroll: null,
   traceBase: null,
   selectedFeatures: new Set(),
   alignTarget: null,
-  alignLocal: false,
+  alignLocal: true,
   alignBand: 0,
   alignBusy: false,
   alignResult: null,
