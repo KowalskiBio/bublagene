@@ -1,11 +1,16 @@
 // ABI trace (.ab1) reader.
 //
 // The container is a small directory of 28-byte tag entries followed by data
-// blocks. Directory offsets differ between writers, so the reader first tries
-// the standard header offsets and then scans for a valid run of entries. Only
-// the tags needed for a chromatogram are interpreted.
+// blocks. Data of four bytes or fewer is stored in the entry itself, in place
+// of the offset. Directory offsets differ between writers, so the reader first
+// tries the standard header offsets and then scans for a valid run of entries.
+// Only the tags needed for a chromatogram are interpreted.
+//
+// Element types (ABIF): 1 byte, 2 char, 3 word (u16), 4 short (i16),
+// 5 long (i32), 7 float, 8 double; 18 pString, 19 cString, 1023 and up are
+// directories and user types, kept as opaque bytes.
 
-const TYPE_SIZE = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 4, 6: 8 };
+const DEFAULT_SIZE = { 1: 1, 2: 1, 3: 2, 4: 2, 5: 4, 6: 8, 7: 4, 8: 8, 10: 4, 11: 4, 12: 10, 13: 1, 18: 1, 19: 1 };
 
 function tagName(buf, p) {
   return String.fromCharCode(buf[p], buf[p + 1], buf[p + 2], buf[p + 3]);
@@ -25,18 +30,16 @@ function readEntry(dv, p, length) {
   if (p + 28 > length) return null;
   const view = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
   const name = tagName(view, p);
-  if (!/^[A-Za-z0-9_%./+-]{4}$/.test(name)) return null;
+  if (!/^[\x21-\x7e]{4}$/.test(name)) return null; // tag names are four printable characters, such as 'Dye#'
   const number = dv.getUint32(p + 4, false);
   const type = dv.getUint16(p + 8, false);
   const elemSize = dv.getUint16(p + 10, false);
   const count = dv.getUint32(p + 12, false);
   const dataSize = dv.getUint32(p + 16, false);
-  const dataOffset = dv.getUint32(p + 20, false);
-  if (!TYPE_SIZE[type]) return null;
-  const size = elemSize || TYPE_SIZE[type];
-  if (!Number.isFinite(count) || !Number.isFinite(dataSize)) return null;
+  // small values live in the entry, where the offset would be
+  const dataOffset = dataSize <= 4 ? p + 20 : dv.getUint32(p + 20, false);
+  const size = elemSize || DEFAULT_SIZE[type] || 1;
   if (dataOffset > length || dataOffset + dataSize > length) return null;
-  if (dataSize && dataSize < count * Math.min(size, 1)) return null;
   return { name, number, key: `${name}${number}`, type, elemSize: size, count, dataSize, dataOffset };
 }
 
@@ -78,11 +81,12 @@ function values(buf, dv, entry) {
   const n = Math.min(entry.count, Math.floor(entry.dataSize / Math.max(1, entry.elemSize)));
   for (let i = 0; i < n; i++) {
     const p = base + i * entry.elemSize;
-    if (entry.type === 1 || entry.type === 2) out.push(buf[p]);
+    if (entry.type === 1 || entry.type === 2 || entry.type === 13) out.push(buf[p]);
     else if (entry.type === 3) out.push(dv.getUint16(p, false));
-    else if (entry.type === 4) out.push(dv.getUint32(p, false));
-    else if (entry.type === 5) out.push(dv.getFloat32(p, false));
-    else if (entry.type === 6) out.push(dv.getFloat64(p, false));
+    else if (entry.type === 4) out.push(dv.getInt16(p, false));
+    else if (entry.type === 5) out.push(dv.getInt32(p, false));
+    else if (entry.type === 7) out.push(dv.getFloat32(p, false));
+    else if (entry.type === 6 || entry.type === 8) out.push(dv.getFloat64(p, false));
   }
   return out;
 }
@@ -114,27 +118,41 @@ export function readAB1(buffer, fileName = 'trace.ab1') {
     return null;
   };
 
-  const data = pick('DATA9') ?? pick('DATA');
   const basesEntry = pick('PBAS2', 'PBAS1', 'FWO_1', 'BASE');
   const qualEntry = pick('PCON2', 'PCON1');
   const locEntry = pick('PLOC2', 'PLOC1');
   const nameEntry = pick('SMPL1', 'SMPL');
 
-  const chan = { A: [], C: [], G: [], T: [] };
+  // The four dye channels are separate DATA tags (9-12 are the analysed ones,
+  // 1-4 the raw), in the order FWO_1 gives: 'GATC' on most instruments.
+  const chan = { A: new Uint16Array(0), C: new Uint16Array(0), G: new Uint16Array(0), T: new Uint16Array(0) };
+  const order = (pleasant(buf, byKey.get('FWO_1')).toUpperCase().replace(/[^ACGT]/g, '') + 'ACGT').slice(0, 4);
+  const tags = [9, 10, 11, 12].every((n) => byKey.has(`DATA${n}`)) ? [9, 10, 11, 12]
+    : [1, 2, 3, 4].every((n) => byKey.has(`DATA${n}`)) ? [1, 2, 3, 4] : null;
   let sampleCount = 0;
-  if (data) {
-    const raw = values(buf, dv, data);
-    sampleCount = Math.floor(raw.length / 4);
-    const order = ['A', 'C', 'G', 'T'];
-    for (let c = 0; c < 4; c++) {
-      const arr = new Uint16Array(sampleCount);
-      for (let i = 0; i < sampleCount; i++) arr[i] = raw[c * sampleCount + i] ?? 0;
-      chan[order[c]] = arr;
+  if (tags) {
+    tags.forEach((n, c) => {
+      const raw = values(buf, dv, byKey.get(`DATA${n}`));
+      chan[order[c]] = Uint16Array.from(raw, (v) => Math.max(0, v)); // a trace can dip a little below zero
+      sampleCount = Math.max(sampleCount, raw.length);
+    });
+  } else {
+    // one tag carrying all four channels end to end
+    const data = pick('DATA9') ?? pick('DATA');
+    if (data) {
+      const raw = values(buf, dv, data);
+      sampleCount = Math.floor(raw.length / 4);
+      ['A', 'C', 'G', 'T'].forEach((base, c) => {
+        const arr = new Uint16Array(sampleCount);
+        for (let i = 0; i < sampleCount; i++) arr[i] = raw[c * sampleCount + i] ?? 0;
+        chan[base] = arr;
+      });
     }
   }
   const bases = pleasant(buf, basesEntry).replace(/[^ACGTN]/gi, '').toUpperCase();
   const confidence = qualEntry ? values(buf, dv, qualEntry) : null;
-  const positions = locEntry ? values(buf, dv, locEntry) : [];
+  // peak positions are stored as signed shorts but are sample numbers, so read them as unsigned
+  const positions = locEntry ? values(buf, dv, locEntry).map((v) => v & 0xffff) : [];
   if (positions.length && positions.length === bases.length && positions[0] > 0) {
     // ABI PLOC is 1-based in practice; a first peak at 0 is already 0-based.
     for (let i = 0; i < positions.length; i++) positions[i] -= 1;

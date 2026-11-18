@@ -102,7 +102,6 @@ export function alignmentView(doc, rows, traces, opts = {}) {
 
   // x position of each called base of the selected trace, in the same columns as the alignment
   let xs = null;
-  let peak = 1;
   if (trace?.refMap && trace.positions?.length) {
     const n = trace.bases.length;
     xs = new Array(n).fill(null);
@@ -113,7 +112,6 @@ export function alignmentView(doc, rows, traces, opts = {}) {
         xs[i] = xs[i - 1] + (xs[i] >= xs[i - 1] ? 1 : -1) * cw * 0.3;
       }
     }
-    for (const c of 'ACGT') for (const v of trace.samples[c]) if (v > peak) peak = v;
   }
 
   function draw() {
@@ -203,7 +201,16 @@ export function alignmentView(doc, rows, traces, opts = {}) {
     ctx.fillStyle = line;
     ctx.fillRect(GUTTER, rowsH, w - GUTTER, 1);
     if (xs) {
-      const y = (v) => top + plotH - (v / peak) * plotH;
+      // scale to the peaks on screen, so a weak stretch is not flattened by a strong one elsewhere
+      let seen = 1;
+      for (let i = 0; i < xs.length; i++) {
+        if (xs[i] == null) continue;
+        const px = GUTTER + xs[i] - left;
+        if (px < GUTTER - 20 || px > w + 20) continue;
+        const p = trace.positions[i];
+        for (const c of 'ACGT') for (let k = p - 3; k <= p + 3; k++) if (trace.samples[c][k] > seen) seen = trace.samples[c][k];
+      }
+      const y = (v) => top + plotH - (Math.min(v, seen * 1.1) / (seen * 1.1)) * plotH;
       const flip = !!trace.reverse;
       const shade = (c) => DYE[flip ? complement(c) : c] ?? ink;
       ctx.lineWidth = 1.25;

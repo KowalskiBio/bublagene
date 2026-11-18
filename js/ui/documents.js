@@ -57,7 +57,9 @@ export function attachRead(ref, read, trace = null) {
 // read does not match, it opens as a document of its own.
 export async function openTraceFile(buffer, fileName) {
   const trace = { id: newId(), ...(await readTrace(buffer, fileName)) };
-  if (!trace.name) trace.name = fileName.replace(/\.[^.]+$/, '');
+  // the file's own name says more than the instrument's sample id (SEQ10046897_A2_H10_0)
+  trace.sample = trace.name;
+  trace.name = fileName.replace(/\.[^.]+$/, '') || trace.name;
   const ref = current();
   if (ref && ref.seq.length && ref.source?.format !== 'trace') {
     const read = placeRead(ref.seq, trace, { label: trace.name });

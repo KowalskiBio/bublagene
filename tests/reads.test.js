@@ -124,3 +124,17 @@ test('aligning a document that is a trace to a reference opens the Alignment vie
   assert.equal(rows[0].start, 2000);
   assert.equal(traces.get(ref.id)[0].refMap[0], 2399);
 });
+
+test('a trace written the way real instruments do is read: inline small values, separate channels, unusual tag names', async () => {
+  const { readAB1 } = await import('../js/formats/ab1.js');
+  const { makeStandardAB1 } = await import('./ab1-fixture.js');
+  const bases = 'GATTACAGATTACACCGGTT';
+  const t = readAB1(makeStandardAB1({ bases, name: 'SEQ1_H10', order: 'GATC' }));
+  assert.equal(t.bases, bases);
+  assert.equal(t.name, 'SEQ1_H10');
+  assert.equal(t.positions.length, bases.length);
+  assert.equal(t.positions[0], 10 - 1 + 0, 'peak positions are 1-based in the file');
+  // each called base has its own channel peak at its position: this is what the FWO_ order decides
+  for (const [i, b] of [...bases].entries()) assert.equal(t.samples[b][t.positions[i] + 1] > 0 || t.samples[b][t.positions[i]] > 0, true, `peak for base ${i}`);
+  assert.equal(t.tags.includes('Dye#1'), true);
+});
